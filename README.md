@@ -136,9 +136,6 @@
     - LLM 调用失败时 fallback 回原文
   - hybrid：先 filter（预算 ×2），再对幸存者做 summary
 
-  注意：此阶段不是默认开启的。run.py 构建 RAGRuntime 时 compressor 参数为 None，所以实际运行中此阶段被跳过。需要在构建
-  Runtime 时显式传入 ContextCompressor 才会执行。
-
   阶段 6：Build Context（构建上下文）
 
   代码位置：RAG/runtime/pipeline.py:131-134 → RAG/context/builder.py:ContextBuilder.build()
