@@ -39,6 +39,7 @@ class ShortTermMemory:
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self._turns: List[QATurn] = []
+        self.session_context: dict[str, str] = {}
 
     def add(self, query: str, answer: str, context: str = "") -> None:
         self._turns.append(QATurn(query=query, answer=answer, context=context))
@@ -62,6 +63,18 @@ class ShortTermMemory:
 
     def clear(self) -> None:
         self._turns.clear()
+
+    def set_context(self, key: str, value: str) -> None:
+        self.session_context[key] = value
+
+    def get_context_str(self) -> str:
+        if not self.session_context:
+            return ""
+        lines = [f"  - {k}: {v}" for k, v in self.session_context.items()]
+        return "\n".join(lines)
+
+    def clear_context(self) -> None:
+        self.session_context.clear()
 
     def __len__(self) -> int:
         return len(self._turns)

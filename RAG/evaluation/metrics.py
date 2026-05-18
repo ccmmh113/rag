@@ -55,5 +55,10 @@ class EndToEndMetrics:
 class SystemMetrics:
     avg_retrieval_latency_ms: float
     avg_generation_latency_ms: float
-    cache_hit_rate: float
+    llm_cache_rate: float
+    avg_cached_prompt_tokens: float
+    avg_total_prompt_tokens: float
     total_traces: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)

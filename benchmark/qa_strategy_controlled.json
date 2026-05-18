@@ -1,0 +1,411 @@
+[
+  {
+    "id": "Q001",
+    "question": "TinyRAG 的端到端 RAG 链路包含哪些阶段？",
+    "ground_truth": "TinyRAG 链路包括文档读取、父子分块、embedding、FAISS 稠密检索、BM25 稀疏检索、混合召回、候选清洗、reranker、上下文压缩、ContextBuilder、PromptManager、LLM 生成和 trace 记录。",
+    "qa_type": "list",
+    "source": "data\\eval_01_rag_pipeline_and_chunking.md",
+    "section": "EVAL-RAG-001",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-RAG-001: TinyRAG end-to-end pipeline\nTinyRAG 的主链路由多个阶段组成：文档读取、父子分块、embedding、稠密检索、BM25 稀疏检索、混合召回、候选清洗、reranker 精排、上下文压缩、ContextBuilder 构造 prompt、LLM 生成答案、trace 记录。这个链路的目标不是单纯把 top-k chunk 拼给模型，而是在召回率、精度、上下文完整性和 token 成本之间做平衡。\n典型执行顺序如下：\n```text\nReadFiles\n  -> ParentChildChunker\n  -> EmbeddingModel\n  -> FaissVectorIndex\n  -> DenseRetriever + BM25Retriever\n  -> HybridRetriever\n  -> _prepare_rerank_candidates\n  -> BgeReranker\n  -> ContextCompressor\n  -> ContextBuilder\n  -> PromptManager\n  -> OpenAIChat\n  -> TraceStore\n```\n面试回答要点：召回阶段尽量不要漏掉相关证据，reranker 阶段负责把真正能回答问题的片段排到前面，ContextBuilder 负责把检索命中的小块扩展成更完整的父块，并控制最终 prompt 长度。\n## EVAL-RAG-002: parent-child chunking\nParent-child chunking 用两种粒度服务不同目标。child chunk 更短，用于向量检索和关键词检索；parent chunk 更长，用于给 LLM 提供完整上下文。这样可以缓解“召回粒度”和“生成上下文完整性”的矛盾。\n如果只用大块检索，召回可能不够精准；如果只用小块生成，LLM 可能看不到完整语义。父子分块的折中是：\n```text\nchild chunk: 精准命中问题相关的局部内容\nparent chunk: 补充同一主题下的完整解释\nparent_id: child 到 parent 的映射键\n```\n在 TinyRAG 中，child 文档包含 `parent_id`，ContextBuilder 会根据 `parent_map[parent_id]` 找到 parent text。多个 child 命中同一个 parent 时，只保留一次 parent，避免重复浪费 token。"
+    ],
+    "relevant_ids": [
+      "f91c8ff995480b7b::4b9ad787::p0::1::c0",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c1",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c2",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c3"
+    ]
+  },
+  {
+    "id": "Q002",
+    "question": "为什么 parent-child chunking 能同时兼顾召回精度和上下文完整性？",
+    "ground_truth": "child chunk 用于精准检索，parent chunk 用于给 LLM 提供更完整上下文。这样既避免大块召回不准，也避免小块生成时语义不完整。",
+    "qa_type": "why",
+    "source": "data\\eval_01_rag_pipeline_and_chunking.md",
+    "section": "EVAL-RAG-002",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-RAG-001: TinyRAG end-to-end pipeline\nTinyRAG 的主链路由多个阶段组成：文档读取、父子分块、embedding、稠密检索、BM25 稀疏检索、混合召回、候选清洗、reranker 精排、上下文压缩、ContextBuilder 构造 prompt、LLM 生成答案、trace 记录。这个链路的目标不是单纯把 top-k chunk 拼给模型，而是在召回率、精度、上下文完整性和 token 成本之间做平衡。\n典型执行顺序如下：\n```text\nReadFiles\n  -> ParentChildChunker\n  -> EmbeddingModel\n  -> FaissVectorIndex\n  -> DenseRetriever + BM25Retriever\n  -> HybridRetriever\n  -> _prepare_rerank_candidates\n  -> BgeReranker\n  -> ContextCompressor\n  -> ContextBuilder\n  -> PromptManager\n  -> OpenAIChat\n  -> TraceStore\n```\n面试回答要点：召回阶段尽量不要漏掉相关证据，reranker 阶段负责把真正能回答问题的片段排到前面，ContextBuilder 负责把检索命中的小块扩展成更完整的父块，并控制最终 prompt 长度。\n## EVAL-RAG-002: parent-child chunking\nParent-child chunking 用两种粒度服务不同目标。child chunk 更短，用于向量检索和关键词检索；parent chunk 更长，用于给 LLM 提供完整上下文。这样可以缓解“召回粒度”和“生成上下文完整性”的矛盾。\n如果只用大块检索，召回可能不够精准；如果只用小块生成，LLM 可能看不到完整语义。父子分块的折中是：\n```text\nchild chunk: 精准命中问题相关的局部内容\nparent chunk: 补充同一主题下的完整解释\nparent_id: child 到 parent 的映射键\n```\n在 TinyRAG 中，child 文档包含 `parent_id`，ContextBuilder 会根据 `parent_map[parent_id]` 找到 parent text。多个 child 命中同一个 parent 时，只保留一次 parent，避免重复浪费 token。"
+    ],
+    "relevant_ids": [
+      "f91c8ff995480b7b::4b9ad787::p0::1::c0",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c1",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c2",
+      "f91c8ff995480b7b::4b9ad787::p0::1::c3"
+    ]
+  },
+  {
+    "id": "Q003",
+    "question": "chunk_uid 相比 doc_id:source:chunk_id 解决了什么问题？",
+    "ground_truth": "chunk_uid 解决父子分块下不同 parent 的 child chunk 可能重复编号的问题，使评测 relevant_ids、引用定位和旧向量复用更稳定。",
+    "qa_type": "why",
+    "source": "data\\eval_01_rag_pipeline_and_chunking.md",
+    "section": "EVAL-RAG-003",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-RAG-003: stable chunk identity\n稳定 chunk identity 是增量入库和评估匹配的基础。一个不稳定的 chunk id 会导致三类问题：评测集中的 relevant_ids 失效、引用定位不准确、旧向量无法可靠复用。\n推荐的 identity 组成包括：\n```text\ndoc_id\nsource_hash\npage\nparent_chunk_id\nchild_chunk_id\ntext_hash\n```\nTinyRAG 的新版实现使用 `chunk_uid` 作为优先身份标识。它比只使用 `doc_id:source:chunk_id` 更稳，因为父子分块下不同 parent 的 child chunk 都可能从 0 开始编号。\n```python\ndef build_chunk_uid(doc_id: str, source_key: str, page: int, parent_idx: int, child_idx: int) -> str:\n    return f\"{doc_id}::{source_key}::p{page}::{parent_idx}::c{child_idx}\"\n```"
+    ],
+    "relevant_ids": [
+      "f91c8ff995480b7b::4b9ad787::p0::2::c0"
+    ]
+  },
+  {
+    "id": "Q004",
+    "question": "BM25 更适合检索哪些类型的内容？",
+    "ground_truth": "BM25 更适合检索函数名、配置项、错误码、类名、字段名、英文缩写和专有名词等精确 token。",
+    "qa_type": "list",
+    "source": "data\\eval_02_hybrid_retrieval_bm25_dense.md",
+    "section": "EVAL-RET-001",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-RET-001: BM25 sparse retrieval\nBM25 是基于词项匹配的稀疏检索算法。它关注 query 词是否出现在文档中、词在当前文档中的出现频率、词在全局语料中的稀有程度，以及文档长度归一化。BM25 对代码标识符、配置项、错误码、专有名词和英文缩写特别敏感。\nBM25 的优势场景：\n```text\n函数名: _prepare_rerank_candidates\n配置项: candidate_top_k\n错误码: RAG_INDEX_STALE\n类名: HybridRetriever\n字段名: chunk_uid\n```\n如果用户直接搜索 `RAG_INDEX_STALE`，向量检索可能把它当成普通 token，而 BM25 可以精确命中包含该错误码的文档。\n## EVAL-RET-002: dense semantic retrieval\n稠密向量检索把 query 和 chunk 映射到向量空间，通过 cosine similarity 或 inner product 找语义接近的内容。它适合处理同义改写和概念类问题。\n例如用户问：\n```text\n为什么不能只用很小的分块给模型回答？\n```\n即使文档里没有完全相同的句子，dense retrieval 也可能召回 parent-child chunking 相关内容，因为它能捕捉“上下文不完整”“语义被切割”“小块生成信息不足”等语义关系。\n稠密检索的弱点是对精确字符串不够稳定，例如函数名、版本号、错误码和配置 key。"
+    ],
+    "relevant_ids": [
+      "bfd123cd6ad7994a::9f006377::p0::1::c0",
+      "bfd123cd6ad7994a::9f006377::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q005",
+    "question": "为什么向量检索适合回答“不能只用很小分块给模型回答”这类问题？",
+    "ground_truth": "因为 dense retrieval 能根据语义召回与上下文不完整、语义切割、小块生成信息不足相关的内容，即使 query 和文档字面不同。",
+    "qa_type": "why",
+    "source": "data\\eval_02_hybrid_retrieval_bm25_dense.md",
+    "section": "EVAL-RET-002",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-RET-001: BM25 sparse retrieval\nBM25 是基于词项匹配的稀疏检索算法。它关注 query 词是否出现在文档中、词在当前文档中的出现频率、词在全局语料中的稀有程度，以及文档长度归一化。BM25 对代码标识符、配置项、错误码、专有名词和英文缩写特别敏感。\nBM25 的优势场景：\n```text\n函数名: _prepare_rerank_candidates\n配置项: candidate_top_k\n错误码: RAG_INDEX_STALE\n类名: HybridRetriever\n字段名: chunk_uid\n```\n如果用户直接搜索 `RAG_INDEX_STALE`，向量检索可能把它当成普通 token，而 BM25 可以精确命中包含该错误码的文档。\n## EVAL-RET-002: dense semantic retrieval\n稠密向量检索把 query 和 chunk 映射到向量空间，通过 cosine similarity 或 inner product 找语义接近的内容。它适合处理同义改写和概念类问题。\n例如用户问：\n```text\n为什么不能只用很小的分块给模型回答？\n```\n即使文档里没有完全相同的句子，dense retrieval 也可能召回 parent-child chunking 相关内容，因为它能捕捉“上下文不完整”“语义被切割”“小块生成信息不足”等语义关系。\n稠密检索的弱点是对精确字符串不够稳定，例如函数名、版本号、错误码和配置 key。"
+    ],
+    "relevant_ids": [
+      "bfd123cd6ad7994a::9f006377::p0::1::c0",
+      "bfd123cd6ad7994a::9f006377::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q006",
+    "question": "RRF 为什么不直接比较 BM25 分数和向量相似度？",
+    "ground_truth": "因为 BM25 和向量相似度的原始分数尺度不同，RRF 根据排名融合结果，更稳定，不需要强制统一分数尺度。",
+    "qa_type": "why",
+    "source": "data\\eval_02_hybrid_retrieval_bm25_dense.md",
+    "section": "EVAL-RET-003",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-RET-003: RRF fusion\nRRF，全称 Reciprocal Rank Fusion，用于融合多个检索器的排序结果。它不直接比较 BM25 分数和向量相似度，因为两者分数尺度不同，而是根据排名给分。\n简化公式：\n```text\nscore(doc) = dense_weight / (rrf_k + dense_rank)\n           + sparse_weight / (rrf_k + sparse_rank)\n```\n在 TinyRAG 中，HybridRetriever 可以使用 RRF 融合 DenseRetriever 和 BM25Retriever。RRF 的优点是稳定，不需要强行把不同检索器的原始分数归一到同一个尺度。\n## EVAL-RET-004: weighted fusion\nWeighted fusion 会先把 dense 和 sparse 的分数归一化，再按权重相加。它适合做消融实验，但对分数分布更敏感。如果某个检索器的分数跨度异常，weighted fusion 可能偏向一侧。\nTinyRAG 中的建议：\n```text\n默认使用 RRF\n短关键词或代码标识符查询提高 sparse_weight\n长语义问题提高 dense_weight\n```"
+    ],
+    "relevant_ids": [
+      "bfd123cd6ad7994a::9f006377::p0::2::c0",
+      "bfd123cd6ad7994a::9f006377::p0::2::c1"
+    ]
+  },
+  {
+    "id": "Q007",
+    "question": "增量 embedding 和增量 index update 有什么区别？",
+    "ground_truth": "增量 embedding 是少算向量，未变化 chunk 复用旧 embedding；增量 index update 是少改索引，新增、修改、删除向量直接在索引中 upsert/delete。",
+    "qa_type": "compare",
+    "source": "data\\eval_03_vector_index_incremental_faiss.md",
+    "section": "EVAL-IDX-001",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-IDX-001: incremental embedding versus index update\n增量 embedding 和增量 index update 是两层不同的优化。\n增量 embedding 解决的是“少算向量”：如果 chunk 的 identity、text_hash 和 embedding model 没变，就直接复用旧向量，只给新增或修改的 chunk 计算 embedding。\n增量 index update 解决的是“少改索引”：新增向量时直接 add，修改时 delete old vector 再 upsert new vector，删除文件时按 id 删除对应向量。\nTinyRAG 当前采用的策略是：\n```text\n增量 embedding 复用\nFAISS index 基于完整向量集合重建\n```\n这是一个本地轻量场景下的一致性优先方案。它减少了最昂贵的 embedding 计算，但没有声称自己实现了向量数据库级别的 upsert/delete。\n## EVAL-IDX-002: index manifest\n索引 manifest 用来判断知识库是否发生变化。它记录文件路径、文件大小、文件 SHA1、分块参数和 schema version。\n示例 manifest：\n```json\n{\n  \"schema_version\": 2,\n  \"data_dir\": \"F:/TinyRAG-master/data\",\n  \"files\": [\n    {\n      \"path\": \"F:/TinyRAG-master/data/eval_03_vector_index_incremental_faiss.md\",\n      \"size\": 2048,\n      \"sha1\": \"example-sha1\"\n    }\n  ],\n  \"parent_child\": {\n    \"child_max_tokens\": 250,\n    \"child_overlap_tokens\": 30,\n    \"parent_max_tokens\": 2000\n  }\n}\n```\n如果 manifest 没变，系统可以直接加载旧索引。如果 manifest 变化，系统重新读取文档、切 chunk，并复用未变化 chunk 的历史向量。"
+    ],
+    "relevant_ids": [
+      "fc8ec5dc7444ca97::c8cc69d2::p0::1::c0",
+      "fc8ec5dc7444ca97::c8cc69d2::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q008",
+    "question": "index manifest 记录哪些信息，用来判断什么？",
+    "ground_truth": "manifest 记录文件路径、文件大小、文件 SHA1、分块参数和 schema version，用来判断知识库或分块配置是否变化，决定是否复用旧索引。",
+    "qa_type": "list",
+    "source": "data\\eval_03_vector_index_incremental_faiss.md",
+    "section": "EVAL-IDX-002",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-IDX-001: incremental embedding versus index update\n增量 embedding 和增量 index update 是两层不同的优化。\n增量 embedding 解决的是“少算向量”：如果 chunk 的 identity、text_hash 和 embedding model 没变，就直接复用旧向量，只给新增或修改的 chunk 计算 embedding。\n增量 index update 解决的是“少改索引”：新增向量时直接 add，修改时 delete old vector 再 upsert new vector，删除文件时按 id 删除对应向量。\nTinyRAG 当前采用的策略是：\n```text\n增量 embedding 复用\nFAISS index 基于完整向量集合重建\n```\n这是一个本地轻量场景下的一致性优先方案。它减少了最昂贵的 embedding 计算，但没有声称自己实现了向量数据库级别的 upsert/delete。\n## EVAL-IDX-002: index manifest\n索引 manifest 用来判断知识库是否发生变化。它记录文件路径、文件大小、文件 SHA1、分块参数和 schema version。\n示例 manifest：\n```json\n{\n  \"schema_version\": 2,\n  \"data_dir\": \"F:/TinyRAG-master/data\",\n  \"files\": [\n    {\n      \"path\": \"F:/TinyRAG-master/data/eval_03_vector_index_incremental_faiss.md\",\n      \"size\": 2048,\n      \"sha1\": \"example-sha1\"\n    }\n  ],\n  \"parent_child\": {\n    \"child_max_tokens\": 250,\n    \"child_overlap_tokens\": 30,\n    \"parent_max_tokens\": 2000\n  }\n}\n```\n如果 manifest 没变，系统可以直接加载旧索引。如果 manifest 变化，系统重新读取文档、切 chunk，并复用未变化 chunk 的历史向量。"
+    ],
+    "relevant_ids": [
+      "fc8ec5dc7444ca97::c8cc69d2::p0::1::c0",
+      "fc8ec5dc7444ca97::c8cc69d2::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q009",
+    "question": "RAG_INDEX_STALE 表示什么错误？",
+    "ground_truth": "RAG_INDEX_STALE 表示 manifest 和磁盘索引不一致，文档或分块配置已经变化，需要刷新或重建索引。",
+    "qa_type": "definition",
+    "source": "data\\eval_03_vector_index_incremental_faiss.md",
+    "section": "EVAL-IDX-004",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-IDX-003: FAISS tradeoff\nFAISS 适合本地轻量、高性能相似度搜索。它对 demo、单机部署和中小规模知识库很友好。与 Qdrant 或 Milvus 相比，FAISS 的优势是简单、快、依赖少；劣势是缺少原生 payload filter、服务化 API、按 metadata 删除和标准化 upsert 能力。\n面试回答中可以明确边界：\n```text\n当前项目为了轻量性保留 FAISS。\n如果知识库需要频繁新增、删除、按租户隔离或服务化部署，会抽象 VectorStore 并切换 Qdrant。\n```\n## EVAL-IDX-004: stale index error\n当 manifest 与磁盘索引不一致时，可以定义内部错误码 `RAG_INDEX_STALE`。这个错误表示文档或分块配置已经变化，旧索引不能直接使用，需要触发索引更新。\n示例处理：\n```python\nclass IndexStateError(RuntimeError):\n    pass\ndef ensure_manifest_compatible(saved_manifest: dict, current_manifest: dict) -> None:\n    if saved_manifest != current_manifest:\n        raise IndexStateError(\"RAG_INDEX_STALE: manifest changed, rebuild index required\")\n```\n这个片段适合测试 BM25 对精确错误码和函数名的召回能力。"
+    ],
+    "relevant_ids": [
+      "fc8ec5dc7444ca97::c8cc69d2::p0::2::c0",
+      "fc8ec5dc7444ca97::c8cc69d2::p0::2::c1"
+    ]
+  },
+  {
+    "id": "Q010",
+    "question": "_prepare_rerank_candidates 在 reranker 前做了哪些清洗？",
+    "ground_truth": "它过滤空文本，按 identity 去重保留更高 score 的候选，限制同一 parent_id 下的 child 数量，并限制送入 reranker 的候选总数。",
+    "qa_type": "list",
+    "source": "data\\eval_04_reranker_context_budget.md",
+    "section": "EVAL-CTX-001",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-CTX-001: pre-rerank candidate cleanup\nReranker 前适合做轻量候选清洗，而不适合做强语义过滤。原因是 reranker 前还没有 query-doc 交互分数，强过滤可能误删有用证据。\nTinyRAG 的候选清洗包括：\n```text\n过滤空文本\n按 identity 去重，保留 score 更高的候选\n同一个 parent_id 下限制 child 数量\n最多保留 candidate_top_k 个候选送入 reranker\n```\n对应函数名是 `_prepare_rerank_candidates`，核心配置项是 `candidate_top_k` 和 `max_candidates_per_parent`。\n## EVAL-CTX-002: reranker\nBGE reranker 是 cross-encoder 精排模型。它输入 `(query, document)` 对，输出相关性分数。相比第一阶段召回，reranker 计算更慢，但能更准确判断某个 chunk 是否真正回答当前问题。\n典型策略：\n```text\n召回阶段 top 50，追求 recall\n候选清洗后 top 30，减少 reranker 成本\nreranker 输出 top 8，追求 precision\n```\n如果用户问“为什么候选清洗不能代替 reranker”，答案是：候选清洗只看去重、父块数量和空文本等结构信息；reranker 会结合 query 判断内容相关性。"
+    ],
+    "relevant_ids": [
+      "db06a452b2d21104::1359d739::p0::1::c0",
+      "db06a452b2d21104::1359d739::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q011",
+    "question": "候选清洗为什么不能代替 reranker？",
+    "ground_truth": "候选清洗只根据空文本、重复、parent 数量等结构信息做保守处理；reranker 会结合 query 和 document 计算交互相关性，因此能更准确判断内容是否回答问题。",
+    "qa_type": "why",
+    "source": "data\\eval_04_reranker_context_budget.md",
+    "section": "EVAL-CTX-002",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-CTX-001: pre-rerank candidate cleanup\nReranker 前适合做轻量候选清洗，而不适合做强语义过滤。原因是 reranker 前还没有 query-doc 交互分数，强过滤可能误删有用证据。\nTinyRAG 的候选清洗包括：\n```text\n过滤空文本\n按 identity 去重，保留 score 更高的候选\n同一个 parent_id 下限制 child 数量\n最多保留 candidate_top_k 个候选送入 reranker\n```\n对应函数名是 `_prepare_rerank_candidates`，核心配置项是 `candidate_top_k` 和 `max_candidates_per_parent`。\n## EVAL-CTX-002: reranker\nBGE reranker 是 cross-encoder 精排模型。它输入 `(query, document)` 对，输出相关性分数。相比第一阶段召回，reranker 计算更慢，但能更准确判断某个 chunk 是否真正回答当前问题。\n典型策略：\n```text\n召回阶段 top 50，追求 recall\n候选清洗后 top 30，减少 reranker 成本\nreranker 输出 top 8，追求 precision\n```\n如果用户问“为什么候选清洗不能代替 reranker”，答案是：候选清洗只看去重、父块数量和空文本等结构信息；reranker 会结合 query 判断内容相关性。"
+    ],
+    "relevant_ids": [
+      "db06a452b2d21104::1359d739::p0::1::c0",
+      "db06a452b2d21104::1359d739::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q012",
+    "question": "为什么不能用 RRF 分数直接和 relevance_threshold=0.3 比较？",
+    "ground_truth": "RRF 分数通常很小，尺度和 reranker 分数不同。ContextCompressor 只在有 rerank_score 时使用绝对阈值，避免误删所有文档。",
+    "qa_type": "why",
+    "source": "data\\eval_04_reranker_context_budget.md",
+    "section": "EVAL-CTX-003",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-CTX-003: context compressor\nContextCompressor 用来减少弱相关上下文。TinyRAG 默认使用 `relevance_filter`。如果有 rerank_score，就根据 `relevance_threshold` 过滤低分文档；如果没有 rerank_score，则避免用 RRF 的小分值直接做绝对阈值过滤。\n配置示例：\n```python\nCompressionConfig(\n    strategy=\"relevance_filter\",\n    relevance_threshold=0.3,\n    summary_max_tokens=200,\n)\n```\n这个设计避免了一个常见错误：把 RRF 分数当成 reranker 分数使用。RRF 分数通常很小，不能直接和 0.3 这样的阈值比较。\n## EVAL-CTX-004: semantic deduplication\nContextBuilder 在构造 prompt 前会做近重复去重。如果传入 embedding_model，则使用 embedding cosine similarity；如果没有 embedding_model，则退化为 Jaccard 词集合相似度。\n简化逻辑：\n```python\ndef similarity(left: str, right: str) -> float:\n    if embedding_model is not None:\n        lv = np.array(embedding_model.get_embedding(left))\n        rv = np.array(embedding_model.get_embedding(right))\n        return cosine(lv, rv)\n    return jaccard(tokenize(left), tokenize(right))\n```\n默认阈值 `semantic_dedup_threshold=0.92`。如果当前候选和已选上下文相似度超过阈值，就跳过当前候选，避免重复占用 prompt budget。"
+    ],
+    "relevant_ids": [
+      "db06a452b2d21104::1359d739::p0::2::c0",
+      "db06a452b2d21104::1359d739::p0::2::c1"
+    ]
+  },
+  {
+    "id": "Q013",
+    "question": "ContextBuilder 没有 embedding_model 时如何做语义去重兜底？",
+    "ground_truth": "如果传入 embedding_model，就用 embedding cosine similarity；如果没有 embedding_model，则用 Jaccard 词集合相似度作为兜底。",
+    "qa_type": "definition",
+    "source": "data\\eval_04_reranker_context_budget.md",
+    "section": "EVAL-CTX-004",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-CTX-003: context compressor\nContextCompressor 用来减少弱相关上下文。TinyRAG 默认使用 `relevance_filter`。如果有 rerank_score，就根据 `relevance_threshold` 过滤低分文档；如果没有 rerank_score，则避免用 RRF 的小分值直接做绝对阈值过滤。\n配置示例：\n```python\nCompressionConfig(\n    strategy=\"relevance_filter\",\n    relevance_threshold=0.3,\n    summary_max_tokens=200,\n)\n```\n这个设计避免了一个常见错误：把 RRF 分数当成 reranker 分数使用。RRF 分数通常很小，不能直接和 0.3 这样的阈值比较。\n## EVAL-CTX-004: semantic deduplication\nContextBuilder 在构造 prompt 前会做近重复去重。如果传入 embedding_model，则使用 embedding cosine similarity；如果没有 embedding_model，则退化为 Jaccard 词集合相似度。\n简化逻辑：\n```python\ndef similarity(left: str, right: str) -> float:\n    if embedding_model is not None:\n        lv = np.array(embedding_model.get_embedding(left))\n        rv = np.array(embedding_model.get_embedding(right))\n        return cosine(lv, rv)\n    return jaccard(tokenize(left), tokenize(right))\n```\n默认阈值 `semantic_dedup_threshold=0.92`。如果当前候选和已选上下文相似度超过阈值，就跳过当前候选，避免重复占用 prompt budget。"
+    ],
+    "relevant_ids": [
+      "db06a452b2d21104::1359d739::p0::2::c0",
+      "db06a452b2d21104::1359d739::p0::2::c1"
+    ]
+  },
+  {
+    "id": "Q014",
+    "question": "ContextBuilder 的 token budget 控制顺序是什么？",
+    "ground_truth": "先做父块去重、exact dedup、semantic dedup，再计算 header token 和可用 token，截断文本，追加 citation。",
+    "qa_type": "list",
+    "source": "data\\eval_04_reranker_context_budget.md",
+    "section": "EVAL-CTX-005",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-CTX-005: token budget\nContextBuilder 用 `max_tokens` 控制 prompt 上下文预算。它按照 reranker 排序依次加入片段，每加入一段前先计算剩余 token。如果剩余预算不足，则截断当前片段或停止加入。\n预算控制顺序：\n```text\n父块去重\nexact dedup\nsemantic dedup\n计算 header token\n计算 available tokens\ntrim_to_tokens\n追加 citation\n```\n这个策略保证高相关片段优先进入 prompt，低排序或重复片段不会挤占上下文空间。"
+    ],
+    "relevant_ids": [
+      "db06a452b2d21104::1359d739::p0::3::c0"
+    ]
+  },
+  {
+    "id": "Q015",
+    "question": "FastAPI 的 /api/index/build 接口负责什么？",
+    "ground_truth": "POST /api/index/build 用于触发索引构建或更新，Web 层由 RuntimeManager 懒加载 embedding、索引、reranker 和 RAGRuntime。",
+    "qa_type": "definition",
+    "source": "data\\eval_05_fastapi_vue_code.md",
+    "section": "EVAL-WEB-001",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召",
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召",
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召"
+    ],
+    "relevant_ids": [
+      "023e920d411913f1::8611ab58::p0::1::c0",
+      "023e920d411913f1::8611ab58::p0::1::c1",
+      "023e920d411913f1::8611ab58::p0::1::c2"
+    ]
+  },
+  {
+    "id": "Q016",
+    "question": "UNSUPPORTED_FILE_TYPE 在上传接口里什么时候返回？",
+    "ground_truth": "当上传文件后缀不是 .md、.txt 或 .pdf 时，/api/files/upload 会返回 UNSUPPORTED_FILE_TYPE。",
+    "qa_type": "definition",
+    "source": "data\\eval_05_fastapi_vue_code.md",
+    "section": "EVAL-WEB-002",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召",
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召",
+      "## EVAL-WEB-001: FastAPI runtime manager\nTinyRAG 的 Web 层使用 FastAPI 暴露接口，前端使用 Vue CDN 构建轻量页面。RuntimeManager 负责懒加载 embedding、索引、reranker 和 RAGRuntime。\n核心接口：\n```text\nGET  /api/status\nPOST /api/index/build\nGET  /api/config\nPATCH /api/config\nPOST /api/chat\nGET  /api/traces\nGET  /api/memories\nPOST /api/memories\n```\n`POST /api/index/build` 会触发索引构建或更新。`POST /api/chat` 会调用 runtime.query，并返回 answer、context、citations 和 trace。\n## EVAL-WEB-002: upload and ingestion design\n如果要支持上传新文件，FastAPI 可以增加 `/api/files/upload`。上传后不要立刻覆盖旧索引，而是先保存文件、计算 hash、更新 manifest，再触发索引更新。\n示例代码：\n```python\nfrom fastapi import APIRouter, UploadFile, File\nfrom pathlib import Path\nrouter = APIRouter()\nDATA_DIR = Path(\"data\")\n@router.post(\"/api/files/upload\")\nasync def upload_file(file: UploadFile = File(...)):\n    suffix = Path(file.filename).suffix.lower()\n    if suffix not in {\".md\", \".txt\", \".pdf\"}:\n        return {\"ok\": False, \"error\": \"UNSUPPORTED_FILE_TYPE\"}\n    target = DATA_DIR / file.filename\n    content = await file.read()\n    target.write_bytes(content)\n    return {\"ok\": True, \"filename\": file.filename, \"bytes\": len(content)}\n```\n这个片段适合测试检索器对 `UNSUPPORTED_FILE_TYPE`、`UploadFile`、`/api/files/upload` 等精确代码 token 的召"
+    ],
+    "relevant_ids": [
+      "023e920d411913f1::8611ab58::p0::1::c0",
+      "023e920d411913f1::8611ab58::p0::1::c1",
+      "023e920d411913f1::8611ab58::p0::1::c2"
+    ]
+  },
+  {
+    "id": "Q017",
+    "question": "Vue 的 saveConfig 方法会提交哪些检索配置？",
+    "ground_truth": "saveConfig 会提交 dense_weight、sparse_weight、use_reranker 和 fusion 等配置到 PATCH /api/config。",
+    "qa_type": "list",
+    "source": "data\\eval_05_fastapi_vue_code.md",
+    "section": "EVAL-WEB-003",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-WEB-003: Vue config panel\n前端配置面板可以暴露 top_k、fusion、dense_weight、sparse_weight、use_reranker、compression strategy 等参数。用户改完配置后调用 `PATCH /api/config`，再决定是否重建索引。\n示例 Vue 方法：\n```javascript\nasync saveConfig() {\n  const payload = {\n    dense_weight: this.config.dense_weight,\n    sparse_weight: this.config.sparse_weight,\n    use_reranker: this.config.use_reranker,\n    fusion: this.config.fusion\n  };\n  this.status = await this.api('/api/config', {\n    method: 'PATCH',\n    body: JSON.stringify(payload)\n  });\n}\n```\n这类代码检索更依赖 BM25，因为函数名和 API path 是精确字符串。"
+    ],
+    "relevant_ids": [
+      "023e920d411913f1::8611ab58::p0::2::c0"
+    ]
+  },
+  {
+    "id": "Q018",
+    "question": "检索评估应该比较哪些组？",
+    "ground_truth": "应该比较 Dense only、BM25 only、Hybrid RRF、Hybrid Weighted、Hybrid + Reranker 和 Full Pipeline 等组。",
+    "qa_type": "list",
+    "source": "data\\eval_06_trace_evaluation_report.md",
+    "section": "EVAL-EVAL-001",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-EVAL-001: retrieval metrics\nRAG 检索评估常用指标包括 Context Precision、Context Recall、Hit@K、MRR 和 latency。Context Precision 关注相关文档是否排在前面，Context Recall 关注所有相关文档被召回的比例，Hit@K 关注 top-k 中是否至少命中一个相关文档，MRR 关注第一个相关结果的位置。\n推荐比较组：\n```text\nDense only\nBM25 only\nHybrid RRF\nHybrid Weighted\nHybrid + Reranker\nFull Pipeline\n```\n如果 Hybrid 的 Context Recall 高于 Dense only 和 BM25 only，说明两类召回互补。如果 Hybrid + Reranker 的 Context Precision 更高，说明精排有效。\n## EVAL-EVAL-002: generation metrics\n生成评估关注 Faithfulness、Answer Relevancy、Answer Correctness 和 Hallucination Rate。Faithfulness 判断答案是否被上下文支持；Answer Relevancy 判断答案是否直接回应问题；Answer Correctness 判断答案和标准答案是否一致。\n对于本项目，检索评估应先跑稳定，再跑生成评估。否则生成质量差可能来自召回失败、reranker 排序失败、context compressor 误删证据或 LLM 自身幻觉，难以定位。\n## EVAL-EVAL-003: trace fields\nTrace 用来解释一次问答为什么成功或失败。建议记录：\n```text\nquery\nroute\nroute_policy_scores\nrecalled_docs\nrerank_candidate_count\nrerank_candidate_dropped\nreranked_count\nretrieval_latency\nrerank_latency\ngeneration_latency\nprompt_tokens\ncitations\nanswer_preview\n```\n当某个问题回答错误时，可以根据 trace 判断失败位置。如果 recalled_docs 没有相关内容，是召回失败；如果 recalled_docs 有但 reranked 没保留，是精排失败；如果 citations 正确但答案错误，是生成或 prompt 约束问题。"
+    ],
+    "relevant_ids": [
+      "45b979349939fe5e::53122c0f::p0::1::c0",
+      "45b979349939fe5e::53122c0f::p0::1::c1",
+      "45b979349939fe5e::53122c0f::p0::1::c2"
+    ]
+  },
+  {
+    "id": "Q019",
+    "question": "为什么应该先跑检索评估，再跑生成评估？",
+    "ground_truth": "如果检索不稳定，生成错误可能来自召回失败、排序失败、压缩误删或 LLM 幻觉，难以定位；先稳定检索评估有助于归因。",
+    "qa_type": "why",
+    "source": "data\\eval_06_trace_evaluation_report.md",
+    "section": "EVAL-EVAL-002",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-EVAL-001: retrieval metrics\nRAG 检索评估常用指标包括 Context Precision、Context Recall、Hit@K、MRR 和 latency。Context Precision 关注相关文档是否排在前面，Context Recall 关注所有相关文档被召回的比例，Hit@K 关注 top-k 中是否至少命中一个相关文档，MRR 关注第一个相关结果的位置。\n推荐比较组：\n```text\nDense only\nBM25 only\nHybrid RRF\nHybrid Weighted\nHybrid + Reranker\nFull Pipeline\n```\n如果 Hybrid 的 Context Recall 高于 Dense only 和 BM25 only，说明两类召回互补。如果 Hybrid + Reranker 的 Context Precision 更高，说明精排有效。\n## EVAL-EVAL-002: generation metrics\n生成评估关注 Faithfulness、Answer Relevancy、Answer Correctness 和 Hallucination Rate。Faithfulness 判断答案是否被上下文支持；Answer Relevancy 判断答案是否直接回应问题；Answer Correctness 判断答案和标准答案是否一致。\n对于本项目，检索评估应先跑稳定，再跑生成评估。否则生成质量差可能来自召回失败、reranker 排序失败、context compressor 误删证据或 LLM 自身幻觉，难以定位。\n## EVAL-EVAL-003: trace fields\nTrace 用来解释一次问答为什么成功或失败。建议记录：\n```text\nquery\nroute\nroute_policy_scores\nrecalled_docs\nrerank_candidate_count\nrerank_candidate_dropped\nreranked_count\nretrieval_latency\nrerank_latency\ngeneration_latency\nprompt_tokens\ncitations\nanswer_preview\n```\n当某个问题回答错误时，可以根据 trace 判断失败位置。如果 recalled_docs 没有相关内容，是召回失败；如果 recalled_docs 有但 reranked 没保留，是精排失败；如果 citations 正确但答案错误，是生成或 prompt 约束问题。"
+    ],
+    "relevant_ids": [
+      "45b979349939fe5e::53122c0f::p0::1::c0",
+      "45b979349939fe5e::53122c0f::p0::1::c1",
+      "45b979349939fe5e::53122c0f::p0::1::c2"
+    ]
+  },
+  {
+    "id": "Q020",
+    "question": "一次问答 trace 建议记录哪些字段？",
+    "ground_truth": "trace 建议记录 query、route、policy scores、recalled_docs、rerank_candidate_count、rerank_candidate_dropped、reranked_count、各阶段 latency、prompt_tokens、citations 和 answer_preview。",
+    "qa_type": "list",
+    "source": "data\\eval_06_trace_evaluation_report.md",
+    "section": "EVAL-EVAL-003",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-EVAL-001: retrieval metrics\nRAG 检索评估常用指标包括 Context Precision、Context Recall、Hit@K、MRR 和 latency。Context Precision 关注相关文档是否排在前面，Context Recall 关注所有相关文档被召回的比例，Hit@K 关注 top-k 中是否至少命中一个相关文档，MRR 关注第一个相关结果的位置。\n推荐比较组：\n```text\nDense only\nBM25 only\nHybrid RRF\nHybrid Weighted\nHybrid + Reranker\nFull Pipeline\n```\n如果 Hybrid 的 Context Recall 高于 Dense only 和 BM25 only，说明两类召回互补。如果 Hybrid + Reranker 的 Context Precision 更高，说明精排有效。\n## EVAL-EVAL-002: generation metrics\n生成评估关注 Faithfulness、Answer Relevancy、Answer Correctness 和 Hallucination Rate。Faithfulness 判断答案是否被上下文支持；Answer Relevancy 判断答案是否直接回应问题；Answer Correctness 判断答案和标准答案是否一致。\n对于本项目，检索评估应先跑稳定，再跑生成评估。否则生成质量差可能来自召回失败、reranker 排序失败、context compressor 误删证据或 LLM 自身幻觉，难以定位。\n## EVAL-EVAL-003: trace fields\nTrace 用来解释一次问答为什么成功或失败。建议记录：\n```text\nquery\nroute\nroute_policy_scores\nrecalled_docs\nrerank_candidate_count\nrerank_candidate_dropped\nreranked_count\nretrieval_latency\nrerank_latency\ngeneration_latency\nprompt_tokens\ncitations\nanswer_preview\n```\n当某个问题回答错误时，可以根据 trace 判断失败位置。如果 recalled_docs 没有相关内容，是召回失败；如果 recalled_docs 有但 reranked 没保留，是精排失败；如果 citations 正确但答案错误，是生成或 prompt 约束问题。"
+    ],
+    "relevant_ids": [
+      "45b979349939fe5e::53122c0f::p0::1::c0",
+      "45b979349939fe5e::53122c0f::p0::1::c1",
+      "45b979349939fe5e::53122c0f::p0::1::c2"
+    ]
+  },
+  {
+    "id": "Q021",
+    "question": "retrieval_miss 和 ranking_error 有什么区别？",
+    "ground_truth": "retrieval_miss 是召回阶段没有取到证据；ranking_error 是召回有证据，但排序太靠后，没有进入最终上下文。",
+    "qa_type": "compare",
+    "source": "data\\eval_06_trace_evaluation_report.md",
+    "section": "EVAL-EVAL-004",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-EVAL-004: failure taxonomy\n错误分析可以分为五类：\n```text\nretrieval_miss: 召回阶段没有取到证据\nranking_error: 召回有证据，但排序太靠后\ncompression_drop: 压缩阶段误删证据\ncontext_budget_overflow: 证据存在，但因为 token budget 没进入 prompt\ngeneration_hallucination: 上下文正确，但 LLM 生成错误\n```\n面试中最有说服力的不是只展示平均指标，而是展示失败样本和归因。"
+    ],
+    "relevant_ids": [
+      "45b979349939fe5e::53122c0f::p0::2::c0"
+    ]
+  },
+  {
+    "id": "Q022",
+    "question": "Agent memory 和 RAG 向量索引里的 memory 有什么不同？",
+    "ground_truth": "Agent memory 保存用户偏好、历史任务、失败经验和流程；RAG 向量索引用于按 query 检索外部知识片段，两者不是同一个概念。",
+    "qa_type": "compare",
+    "source": "data\\eval_07_agent_memory_distractors.md",
+    "section": "EVAL-DIST-001",
+    "retrieval_focus": "semantic",
+    "relevant_contexts": [
+      "## EVAL-DIST-001: agent memory is not vector index memory\nAgent memory 和 RAG 向量索引都可能使用“记忆”这个词，但它们不是同一个概念。Agent memory 通常指用户偏好、历史任务、失败经验和可复用流程；RAG 向量索引主要用于根据 query 检索外部知识片段。\n这个文档故意作为干扰语料使用。它包含 memory、embedding、retrieval、context 等词，但主题是 Agent 行为记忆，不是 TinyRAG 的 FAISS 知识库索引。"
+    ],
+    "relevant_ids": [
+      "40495f0c1dbf294b::5057209e::p0::1::c0"
+    ]
+  },
+  {
+    "id": "Q023",
+    "question": "_vector_cache_from_state 的作用是什么？",
+    "ground_truth": "_vector_cache_from_state 从旧索引状态和 vectors.npy 中构造向量缓存，用于复用未变化 chunk 的 embedding。",
+    "qa_type": "definition",
+    "source": "data\\eval_08_code_error_playbook.md",
+    "section": "EVAL-CODE-001",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-CODE-001: exact code token retrieval\n以下代码片段用于测试 BM25 对精确 token 的检索能力。问题中如果包含 `_vector_cache_from_state`、`chunk_uid`、`RAG_INDEX_STALE`、`candidate_top_k`，BM25 应该能稳定命中。\n```python\ndef _vector_cache_from_state(saved: dict | None) -> dict[tuple[str, str], np.ndarray]:\n    if not saved or not os.path.exists(VECTORS_FILE):\n        return {}\n    old_docs = saved.get(\"docs\", [])\n    old_vectors = np.load(VECTORS_FILE)\n    cache = {}\n    for doc, vector in zip(old_docs, old_vectors):\n        text_hash = doc.metadata.get(\"text_hash\")\n        cache[(doc.identity, text_hash)] = vector.astype(np.float32)\n    return cache\n```\n这个函数的作用是从旧索引状态和 vectors.npy 中构造向量缓存，用于增量 embedding 复用。\n## EVAL-CODE-002: candidate cleanup code\n```python\ndef _prepare_rerank_candidates(documents: list[Document]) -> list[Document]:\n    unique_by_id = {}\n    for doc in documents:\n        if not doc.text.strip():\n            continue\n        current = unique_by_id.get(doc.identity)\n        if current is None or doc.score > current.score:\n            unique_by_id[doc.identity] = doc\n    parent_counts = defaultdict(int)\n    cleaned = []\n    for doc in sorted(unique_by_id.values(), key=lambda d: d.score, reverse=True):\n ",
+      "## EVAL-CODE-001: exact code token retrieval\n以下代码片段用于测试 BM25 对精确 token 的检索能力。问题中如果包含 `_vector_cache_from_state`、`chunk_uid`、`RAG_INDEX_STALE`、`candidate_top_k`，BM25 应该能稳定命中。\n```python\ndef _vector_cache_from_state(saved: dict | None) -> dict[tuple[str, str], np.ndarray]:\n    if not saved or not os.path.exists(VECTORS_FILE):\n        return {}\n    old_docs = saved.get(\"docs\", [])\n    old_vectors = np.load(VECTORS_FILE)\n    cache = {}\n    for doc, vector in zip(old_docs, old_vectors):\n        text_hash = doc.metadata.get(\"text_hash\")\n        cache[(doc.identity, text_hash)] = vector.astype(np.float32)\n    return cache\n```\n这个函数的作用是从旧索引状态和 vectors.npy 中构造向量缓存，用于增量 embedding 复用。\n## EVAL-CODE-002: candidate cleanup code\n```python\ndef _prepare_rerank_candidates(documents: list[Document]) -> list[Document]:\n    unique_by_id = {}\n    for doc in documents:\n        if not doc.text.strip():\n            continue\n        current = unique_by_id.get(doc.identity)\n        if current is None or doc.score > current.score:\n            unique_by_id[doc.identity] = doc\n    parent_counts = defaultdict(int)\n    cleaned = []\n    for doc in sorted(unique_by_id.values(), key=lambda d: d.score, reverse=True):\n "
+    ],
+    "relevant_ids": [
+      "8d0a4c309418f23c::6f2414a2::p0::1::c0",
+      "8d0a4c309418f23c::6f2414a2::p0::1::c1"
+    ]
+  },
+  {
+    "id": "Q024",
+    "question": "RAG_VECTOR_DIM_MISMATCH 怎么处理？",
+    "ground_truth": "RAG_VECTOR_DIM_MISMATCH 表示向量维度和 FAISS 索引维度不一致，应该检查 embedding 模型、索引配置或重建索引。",
+    "qa_type": "definition",
+    "source": "data\\eval_08_code_error_playbook.md",
+    "section": "EVAL-CODE-003",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-CODE-003: error code glossary\n内部错误码说明：\n```text\nRAG_INDEX_STALE: manifest changed and dense index must be refreshed\nRAG_EMPTY_CORPUS: data directory has no supported documents\nRAG_VECTOR_DIM_MISMATCH: vector dimension does not match FAISS index dimension\nRAG_UNSUPPORTED_FILE_TYPE: upload file suffix is not .md, .txt, or .pdf\nRAG_RERANKER_UNAVAILABLE: BGE reranker failed to load\n```\n这些错误码适合测试精确检索。如果 query 是 `RAG_VECTOR_DIM_MISMATCH 怎么处理`，BM25 通常比纯语义检索更可靠。\n## EVAL-CODE-004: JSON config sample\n```json\n{\n  \"retrieval\": {\n    \"fusion\": \"rrf\",\n    \"dense_top_k\": 50,\n    \"sparse_top_k\": 50,\n    \"final_top_k\": 50,\n    \"dense_weight\": 0.9,\n    \"sparse_weight\": 0.1\n  },\n  \"reranker\": {\n    \"candidate_top_k\": 30,\n    \"max_candidates_per_parent\": 2,\n    \"top_k\": 8\n  },\n  \"compression\": {\n    \"strategy\": \"relevance_filter\",\n    \"relevance_threshold\": 0.3\n  }\n}\n```\n如果用户问 `max_candidates_per_parent` 的作用，答案是限制同一个 parent_id 下送入 reranker 的 child 数量，避免一个父块占满候选集。"
+    ],
+    "relevant_ids": [
+      "8d0a4c309418f23c::6f2414a2::p0::2::c0",
+      "8d0a4c309418f23c::6f2414a2::p0::2::c1"
+    ]
+  },
+  {
+    "id": "Q025",
+    "question": "max_candidates_per_parent 的作用是什么？",
+    "ground_truth": "max_candidates_per_parent 限制同一个 parent_id 下送入 reranker 的 child 数量，避免一个父块占满候选集。",
+    "qa_type": "definition",
+    "source": "data\\eval_08_code_error_playbook.md",
+    "section": "EVAL-CODE-004",
+    "retrieval_focus": "exact",
+    "relevant_contexts": [
+      "## EVAL-CODE-003: error code glossary\n内部错误码说明：\n```text\nRAG_INDEX_STALE: manifest changed and dense index must be refreshed\nRAG_EMPTY_CORPUS: data directory has no supported documents\nRAG_VECTOR_DIM_MISMATCH: vector dimension does not match FAISS index dimension\nRAG_UNSUPPORTED_FILE_TYPE: upload file suffix is not .md, .txt, or .pdf\nRAG_RERANKER_UNAVAILABLE: BGE reranker failed to load\n```\n这些错误码适合测试精确检索。如果 query 是 `RAG_VECTOR_DIM_MISMATCH 怎么处理`，BM25 通常比纯语义检索更可靠。\n## EVAL-CODE-004: JSON config sample\n```json\n{\n  \"retrieval\": {\n    \"fusion\": \"rrf\",\n    \"dense_top_k\": 50,\n    \"sparse_top_k\": 50,\n    \"final_top_k\": 50,\n    \"dense_weight\": 0.9,\n    \"sparse_weight\": 0.1\n  },\n  \"reranker\": {\n    \"candidate_top_k\": 30,\n    \"max_candidates_per_parent\": 2,\n    \"top_k\": 8\n  },\n  \"compression\": {\n    \"strategy\": \"relevance_filter\",\n    \"relevance_threshold\": 0.3\n  }\n}\n```\n如果用户问 `max_candidates_per_parent` 的作用，答案是限制同一个 parent_id 下送入 reranker 的 child 数量，避免一个父块占满候选集。"
+    ],
+    "relevant_ids": [
+      "8d0a4c309418f23c::6f2414a2::p0::2::c0",
+      "8d0a4c309418f23c::6f2414a2::p0::2::c1"
+    ]
+  }
+]

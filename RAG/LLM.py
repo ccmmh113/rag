@@ -113,6 +113,8 @@ class BaseModel(ABC):
     def __init__(self, path: str = "", model: str = "") -> None:
         self.path = path
         self.model = model
+        self.cached_prompt_tokens: int = 0
+        self.total_prompt_tokens: int = 0
 
     @abstractmethod
     def chat(self, messages: list[dict]) -> str:
@@ -188,6 +190,12 @@ class OpenAIChat(BaseModel):
             kwargs["max_tokens"] = self.max_tokens
 
         response = self.client.chat.completions.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.total_prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            details = getattr(usage, "prompt_tokens_details", None)
+            if details is not None:
+                self.cached_prompt_tokens = getattr(details, "cached_tokens", 0) or 0
         return _extract_message_content(response.choices[0].message.content)
 
 
@@ -251,6 +259,9 @@ class DashscopeChat(BaseModel):
         response = client.chat.completions.create(**kwargs)
         if not getattr(response, "output", None):
             raise RuntimeError(f"DashScope chat request failed: {response}")
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.total_prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
         return _extract_message_content(response.output.choices[0].message.content)
 
 
@@ -291,6 +302,9 @@ class ZhipuChat(BaseModel):
             kwargs["max_tokens"] = self.max_tokens
 
         response = self.client.chat.completions.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.total_prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
         return _extract_message_content(response.choices[0].message.content)
 
 

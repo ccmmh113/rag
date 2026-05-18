@@ -34,7 +34,7 @@ class ChunkingConfig:
 
 @dataclass
 class ParentChildConfig:
-    child_max_tokens: int = 150
+    child_max_tokens: int = 250
     child_overlap_tokens: int = 30
     parent_max_tokens: int = 2000
 
@@ -48,8 +48,8 @@ class RetrievalConfig:
     final_top_k: int = 50
     fusion: Literal["rrf", "weighted"] = "rrf"
     rrf_k: int = 60
-    dense_weight: float = 0.5
-    sparse_weight: float = 0.5
+    dense_weight: float = 0.9
+    sparse_weight: float = 0.1
     parallel: bool = True
 
 

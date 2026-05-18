@@ -1,163 +1,76 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LongTermMemory — SQLite for structured metadata + VectorIndex for embeddings.
+LongTermMemory — Chroma-backed persistent memory.
 
-Design:
-  - SQLite stores every MemoryEntry field (query, answer, context, verified, …)
-  - VectorIndex stores query embeddings, keyed by an integer faiss_id
-  - faiss_id is the SQLite rowid, making the two stores trivially linkable
-  - Only verified entries are used for pipeline bypass (search verified_only=True)
-  - Lifecycle: expire_old() removes entries older than N days
+Stores notes and user preferences in a Chroma collection.
+Native support for insert, upsert, delete, and metadata filtering.
 """
 
 from __future__ import annotations
 
-import os
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, TYPE_CHECKING
 
-import numpy as np
+import chromadb
 
 if TYPE_CHECKING:
-    from RAG.index.base import VectorIndex
     from RAG.types import EmbeddingModel
-
-
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS memory_entries (
-    id          TEXT PRIMARY KEY,
-    faiss_id    INTEGER,
-    query       TEXT NOT NULL,
-    answer      TEXT NOT NULL,
-    context     TEXT NOT NULL,
-    source      TEXT DEFAULT '',
-    verified    INTEGER DEFAULT 0,
-    created_at  TEXT NOT NULL,
-    verified_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_faiss_id
-    ON memory_entries (faiss_id)
-    WHERE faiss_id IS NOT NULL;
-"""
 
 
 @dataclass
 class MemoryEntry:
     id: str
-    query: str
-    answer: str
-    context: str
-    source: str
-    verified: bool
+    content: str
+    entry_type: str          # 'note' | 'preference'
     created_at: str
-    verified_at: Optional[str]
-    embedding_ref: int          # faiss_id / SQLite rowid
+    updated_at: str
 
 
 class LongTermMemory:
-    """
-    Production-grade long-term memory backed by SQLite + VectorIndex.
-
-    Thread safety: SQLite connections are not thread-safe by default;
-    use check_same_thread=False only in single-writer scenarios.
-    """
 
     def __init__(
         self,
-        db_path: str,
-        index: "VectorIndex",
+        db_path: str = "storage/ltm",
         embedding_model: Optional["EmbeddingModel"] = None,
-        similarity_threshold: float = 0.92,
+        similarity_threshold: float = 0.85,
     ) -> None:
-        self._db_path = db_path
-        self._index = index
+        self._similarity_threshold = similarity_threshold
         self._embedding_model = embedding_model
-        self.similarity_threshold = similarity_threshold
-
-        # Persist FAISS index alongside the DB so faiss_ids survive restarts
-        self._index_path = os.path.splitext(db_path)[0] + "_index" if db_path != ":memory:" else None
-        if self._index_path and os.path.exists(self._index_path):
-            self._index.load(self._index_path)
-
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_CREATE_TABLE)
-        self._conn.commit()
+        self._client = chromadb.PersistentClient(path=db_path)
+        self._collection = self._client.get_or_create_collection(
+            name="ltm_entries",
+            metadata={"hnsw:space": "cosine"},
+        )
 
     # ── Write ──────────────────────────────────────────────────────────
 
-    def add(
-        self,
-        query: str,
-        answer: str,
-        context: str,
-        source: str = "",
-        verified: bool = False,
-    ) -> str:
-        """Store a Q&A pair. Returns entry id. verified=True for user-saved entries."""
-        entry_id = uuid.uuid4().hex[:12]
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        # Insert with faiss_id=NULL; update after embedding
-        cur = self._conn.execute(
-            "INSERT INTO memory_entries (id, query, answer, context, source, verified, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (entry_id, query, answer, context, source, int(verified), created_at),
-        )
-        self._conn.commit()
-
-        # Add embedding to VectorIndex; leave faiss_id NULL when no model
-        vector = self._embed(query)
-        if vector is not None:
-            self._index.add(np.array([vector], dtype=np.float32))
-            faiss_id = self._index.size - 1
-            self._conn.execute(
-                "UPDATE memory_entries SET faiss_id=? WHERE id=?",
-                (faiss_id, entry_id),
-            )
-            self._conn.commit()
-            if self._index_path:
-                self._index.save(self._index_path)
-        return entry_id
-
-    def add_note(self, content: str) -> str:
-        """Store free-form user note. Always verified=1."""
-        entry_id = uuid.uuid4().hex[:12]
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        cur = self._conn.execute(
-            "INSERT INTO memory_entries (id, query, answer, context, source, verified, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?)",
-            (entry_id, content, content, "", "user_note", created_at),
-        )
-        self._conn.commit()
-
-        vector = self._embed(content)
-        if vector is not None:
-            self._index.add(np.array([vector], dtype=np.float32))
-            faiss_id = self._index.size - 1
-            self._conn.execute(
-                "UPDATE memory_entries SET faiss_id=? WHERE id=?",
-                (faiss_id, entry_id),
-            )
-            self._conn.commit()
-            if self._index_path:
-                self._index.save(self._index_path)
-        return entry_id
-
-    def verify(self, entry_id: str) -> bool:
-        """Manually promote an entry to trusted. Returns False if not found."""
+    def save(self, content: str, entry_type: str = "note") -> str:
+        """Insert or overwrite. Returns entry id."""
         now = datetime.now(timezone.utc).isoformat()
-        cur = self._conn.execute(
-            "UPDATE memory_entries SET verified=1, verified_at=? WHERE id=?",
-            (now, entry_id),
+        existing = self._find_similar(content, entry_type)
+        if existing is not None:
+            entry_id = existing.id
+            embedding = self._embed(content)
+            self._collection.update(
+                ids=[entry_id],
+                documents=[content],
+                embeddings=[embedding] if embedding else None,
+                metadatas=[{"entry_type": entry_type, "created_at": existing.created_at, "updated_at": now}],
+            )
+            return entry_id
+
+        entry_id = uuid.uuid4().hex[:12]
+        embedding = self._embed(content)
+        self._collection.add(
+            ids=[entry_id],
+            documents=[content],
+            embeddings=[embedding] if embedding else None,
+            metadatas=[{"entry_type": entry_type, "created_at": now, "updated_at": now}],
         )
-        self._conn.commit()
-        return cur.rowcount > 0
+        return entry_id
 
     # ── Read ───────────────────────────────────────────────────────────
 
@@ -165,51 +78,79 @@ class LongTermMemory:
         self,
         query: str,
         k: int = 5,
-        verified_only: bool = True,
-    ) -> Optional[MemoryEntry]:
-        """
-        Return the single best-matching entry above similarity_threshold, or None.
-        verified_only=True (default) ensures only trusted answers bypass the pipeline.
-        """
-        vector = self._embed(query)
-        if vector is None or self._index.size == 0:
-            return None
+        entry_type: Optional[str] = None,
+    ) -> List[MemoryEntry]:
+        """Semantic search. Optionally filter by entry_type."""
+        where = {"entry_type": entry_type} if entry_type else None
+        embedding = self._embed(query)
+        if embedding is None:
+            return []
+        results = self._collection.query(
+            query_embeddings=[embedding],
+            n_results=k,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+        entries: List[MemoryEntry] = []
+        if not results["ids"] or not results["ids"][0]:
+            return entries
+        for i, eid in enumerate(results["ids"][0]):
+            distance = results["distances"][0][i] if results.get("distances") else 0.0
+            similarity = 1.0 - float(distance)  # Chroma 返回余弦距离 → 转相似度
+            if similarity < self._similarity_threshold:
+                continue
+            meta = results["metadatas"][0][i] if results["metadatas"] else {}
+            entries.append(MemoryEntry(
+                id=eid,
+                content=results["documents"][0][i],
+                entry_type=meta.get("entry_type", ""),
+                created_at=meta.get("created_at", ""),
+                updated_at=meta.get("updated_at", ""),
+            ))
+        return entries
 
-        results = self._index.search(np.array(vector, dtype=np.float32), k=k)
-        for sr in results:
-            if sr.score < self.similarity_threshold:
-                break
-            entry = self._fetch_by_faiss_id(sr.index, verified_only=verified_only)
-            if entry is not None:
-                return entry
-        return None
+    def list_all(self, entry_type: Optional[str] = None) -> List[MemoryEntry]:
+        """Return all entries, optionally filtered by type."""
+        where = {"entry_type": entry_type} if entry_type else None
+        try:
+            results = self._collection.get(
+                where=where,
+                include=["documents", "metadatas"],
+            )
+        except Exception:
+            return []
+        if not results["ids"]:
+            return []
+        entries: List[MemoryEntry] = []
+        for i, eid in enumerate(results["ids"]):
+            meta = results["metadatas"][i] if results["metadatas"] else {}
+            entries.append(MemoryEntry(
+                id=eid,
+                content=results["documents"][i] if results["documents"] else "",
+                entry_type=meta.get("entry_type", ""),
+                created_at=meta.get("created_at", ""),
+                updated_at=meta.get("updated_at", ""),
+            ))
+        return entries
 
-    def list_unverified(self) -> List[MemoryEntry]:
-        rows = self._conn.execute(
-            "SELECT * FROM memory_entries WHERE verified=0 ORDER BY created_at DESC"
-        ).fetchall()
-        return [self._row_to_entry(r) for r in rows]
+    # ── Delete ─────────────────────────────────────────────────────────
 
-    def list_verified(self) -> List[MemoryEntry]:
-        rows = self._conn.execute(
-            "SELECT * FROM memory_entries WHERE verified=1 ORDER BY verified_at DESC"
-        ).fetchall()
-        return [self._row_to_entry(r) for r in rows]
-
-    # ── Lifecycle ──────────────────────────────────────────────────────
+    def forget(self, entry_id: str) -> None:
+        self._collection.delete(ids=[entry_id])
 
     def expire_old(self, days: int = 90) -> int:
-        """Delete unverified entries older than `days`. Returns count removed."""
+        """Delete entries not updated for `days`. Returns count removed."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        cur = self._conn.execute(
-            "DELETE FROM memory_entries WHERE verified=0 AND created_at < ?",
-            (cutoff,),
-        )
-        self._conn.commit()
-        return cur.rowcount
+        old_ids: List[str] = []
+        for entry in self.list_all():
+            if entry.updated_at < cutoff:
+                old_ids.append(entry.id)
+        if old_ids:
+            self._collection.delete(ids=old_ids)
+        return len(old_ids)
 
     def close(self) -> None:
-        self._conn.close()
+        pass
 
     # ── Internal ───────────────────────────────────────────────────────
 
@@ -218,25 +159,6 @@ class LongTermMemory:
             return None
         return self._embedding_model.get_embedding(text)
 
-    def _fetch_by_faiss_id(
-        self, faiss_id: int, verified_only: bool
-    ) -> Optional[MemoryEntry]:
-        q = "SELECT * FROM memory_entries WHERE faiss_id=?"
-        if verified_only:
-            q += " AND verified=1"
-        row = self._conn.execute(q, (faiss_id,)).fetchone()
-        return self._row_to_entry(row) if row else None
-
-    @staticmethod
-    def _row_to_entry(row: sqlite3.Row) -> MemoryEntry:
-        return MemoryEntry(
-            id=row["id"],
-            query=row["query"],
-            answer=row["answer"],
-            context=row["context"],
-            source=row["source"],
-            verified=bool(row["verified"]),
-            created_at=row["created_at"],
-            verified_at=row["verified_at"],
-            embedding_ref=row["faiss_id"],
-        )
+    def _find_similar(self, content: str, entry_type: Optional[str] = None) -> Optional[MemoryEntry]:
+        results = self.search(content, k=1, entry_type=entry_type)
+        return results[0] if results else None

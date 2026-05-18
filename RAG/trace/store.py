@@ -22,9 +22,13 @@ class TraceStore:
     Write:  store.append(trace)                    — one line per call
     Read:   store.load_all()                       — full history
             store.load_recent(n)                   — last N traces
-            store.filter(lambda t: t.cache_hit)    — predicate filter
+            store.filter(lambda t: t.cached_prompt_tokens > 0)    — predicate filter
 
     Replay / debug: each line is self-contained JSON, grep-friendly.
+
+    Read:   store.load_all()                       — full history
+            store.load_recent(n)                   — last N traces
+            store.filter(lambda t: t.cached_prompt_tokens > 0)  — LLM cache hits
     """
 
     def __init__(self, path: str = "storage/traces.jsonl") -> None:
@@ -59,14 +63,16 @@ class TraceStore:
 
     # ── Analysis helpers ───────────────────────────────────────────────
 
-    def cache_hit_rate(self) -> float:
+    def llm_cache_rate(self) -> float:
         traces = self.load_all()
         if not traces:
             return 0.0
-        return sum(1 for t in traces if t.cache_hit) / len(traces)
+        total = sum(t.total_prompt_tokens for t in traces)
+        cached = sum(t.cached_prompt_tokens for t in traces)
+        return cached / total if total > 0 else 0.0
 
     def avg_latency(self) -> dict:
-        traces = [t for t in self.load_all() if not t.cache_hit]
+        traces = self.load_all()
         if not traces:
             return {}
         return {

@@ -9,10 +9,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from RAG.memory.working import WorkingMemory
 
 
 @dataclass
@@ -28,7 +24,7 @@ class PolicyScore:
 @dataclass
 class RouteDecision:
     """Final routing decision selected by PolicyRouter."""
-    strategy: str           # winning policy name, recorded in WorkingMemory
+    strategy: str           # winning policy name
     dense_weight: float
     sparse_weight: float
     reason: str
@@ -36,19 +32,13 @@ class RouteDecision:
 
 
 class BaseRetrievalPolicy(ABC):
-    """
-    A retrieval policy scores how well it suits the current query.
-    Policies are stateless; session state is passed in explicitly.
-    """
+    """A retrieval policy scores how well it suits the current query."""
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique policy identifier (also used as strategy key in WorkingMemory)."""
+        """Unique policy identifier."""
 
     @abstractmethod
-    def score(self, query: str, working_memory: "WorkingMemory") -> PolicyScore:
-        """
-        Return a PolicyScore for this query.
-        Must NOT raise; return score=0.0 on any error.
-        """
+    def score(self, query: str) -> PolicyScore:
+        """Return a PolicyScore for this query. Must NOT raise; return score=0.0 on any error."""

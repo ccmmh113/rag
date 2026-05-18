@@ -10,7 +10,7 @@ import json
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 import re
-from RAG.chunking import ChunkingConfig, MarkdownAwareChunker
+from RAG.chunking import ChunkingConfig, MarkdownAwareChunker, ParentChildChunker
 from RAG.chunking import count_tokens, token_overlap, trim_to_tokens
 
 enc = None
@@ -61,6 +61,33 @@ class ReadFiles:
                 content = self.read_file_content(file)
                 docs.extend(chunker.chunk(content, source=file))
         return docs
+
+    def get_parent_child_documents(
+        self,
+        child_max_tokens: int = 150,
+        child_overlap_tokens: int = 30,
+        parent_max_tokens: int = 2000,
+    ):
+        """Return (child_docs, parent_map) using ParentChildChunker."""
+        child_docs = []
+        parent_map: dict[str, str] = {}
+        chunker = ParentChildChunker(
+            child_max_tokens=child_max_tokens,
+            child_overlap_tokens=child_overlap_tokens,
+            parent_max_tokens=parent_max_tokens,
+        )
+        for file in self.file_list:
+            if file.endswith(".pdf"):
+                for page_num, page_text in self.read_pdf_pages(file):
+                    cdocs, pmap = chunker.chunk(page_text, source=file, page=page_num)
+                    child_docs.extend(cdocs)
+                    parent_map.update(pmap)
+            else:
+                content = self.read_file_content(file)
+                cdocs, pmap = chunker.chunk(content, source=file)
+                child_docs.extend(cdocs)
+                parent_map.update(pmap)
+        return child_docs, parent_map
 
     @classmethod
     def get_chunk(cls, text: str, max_token_len: int = 600, cover_content: int = 150):

@@ -3,7 +3,7 @@
 """
 Unified QueryTrace schema.
 Every field is optional beyond the identity fields so partial traces
-(e.g. LTM cache hits that skip retrieval) remain valid.
+remain valid.
 """
 
 from __future__ import annotations
@@ -51,7 +51,8 @@ class QueryTrace:
 
     Cache
     -----
-    cache_hit           True if result came from LTM without retrieval
+    cached_prompt_tokens  prompt tokens served from OpenAI prompt cache
+    total_prompt_tokens   prompt tokens reported by API (actual)
 
     Generation
     ----------
@@ -94,7 +95,8 @@ class QueryTrace:
     citations: List[Dict[str, Any]] = field(default_factory=list)
 
     # Cache
-    cache_hit: bool = False
+    cached_prompt_tokens: int = 0
+    total_prompt_tokens: int = 0
 
     # Generation (filled by caller after LLM responds)
     generation_latency: float = 0.0

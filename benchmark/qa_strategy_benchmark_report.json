@@ -1,0 +1,29 @@
+{
+  "spec_count": 105,
+  "output_count": 105,
+  "unresolved": [],
+  "avg_relevant_ids": 2.2,
+  "qa_type_distribution": {
+    "list": 15,
+    "why": 27,
+    "howto": 11,
+    "definition": 40,
+    "compare": 12
+  },
+  "retrieval_focus_distribution": {
+    "semantic": 57,
+    "exact": 38,
+    "multi_hop": 10
+  },
+  "source_distribution": {
+    "eval_01_rag_pipeline_and_chunking.md": 15,
+    "eval_02_hybrid_retrieval_bm25_dense.md": 16,
+    "eval_03_vector_index_incremental_faiss.md": 13,
+    "eval_04_reranker_context_budget.md": 17,
+    "eval_05_fastapi_vue_code.md": 9,
+    "eval_06_trace_evaluation_report.md": 15,
+    "eval_07_agent_memory_distractors.md": 7,
+    "eval_08_code_error_playbook.md": 13
+  },
+  "output": "benchmark/qa_strategy_benchmark.json"
+}

@@ -14,19 +14,19 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from RAG.context.builder import ContextBuilder
 from RAG.context.compressor import ContextCompressor
 from RAG.core.config import RAGConfig
+from RAG.memory.manager import MemoryContext
 from RAG.trace.schema import QueryTrace
 from RAG.trace.store import TraceStore
 
 if TYPE_CHECKING:
-    from RAG.index.base import VectorIndex
     from RAG.LLM import BaseModel, PromptManager
-    from RAG.memory.manager import MemoryManager
+    from RAG.memory.manager import MemoryContext, MemoryManager
     from RAG.Reranker import BaseReranker
     from RAG.retrievers import HybridRetriever
     from RAG.router.router import PolicyRouter
@@ -39,7 +39,6 @@ class RAGResponse:
     context: str
     citations: List[Dict[str, Any]]
     trace: QueryTrace
-    from_cache: bool = False
 
 
 def _doc_summary(doc: "Document", chars: int = 120) -> Dict[str, Any]:
@@ -54,23 +53,6 @@ def _doc_summary(doc: "Document", chars: int = 120) -> Dict[str, Any]:
 
 
 class RAGRuntime:
-    """
-    Production RAG orchestrator.
-
-    All subsystems are injected — no hard-wired providers.
-    Use RAGRuntimeBuilder (or construct manually) to assemble.
-
-    query() flow:
-      1. LTM cache check (verified only)
-      2. PolicyRouter → RouteDecision
-      3. HybridRetriever (Dense + BM25, FAISS-backed)
-      4. Reranker (optional)
-      5. ContextCompressor (optional, kicks in when over token budget)
-      6. ContextBuilder (dedup, overlap removal, parent expansion)
-      7. PromptManager → LLM
-      8. MemoryManager.after_query()
-      9. TraceStore.append()
-    """
 
     def __init__(
         self,
@@ -78,7 +60,7 @@ class RAGRuntime:
         context_builder: ContextBuilder,
         llm: "BaseModel",
         prompt_manager: "PromptManager",
-        memory: "MemoryManager",
+        memory: Optional["MemoryManager"] = None,
         router: Optional["PolicyRouter"] = None,
         reranker: Optional["BaseReranker"] = None,
         compressor: Optional[ContextCompressor] = None,
@@ -96,8 +78,6 @@ class RAGRuntime:
         self._trace_store = trace_store
         self._cfg = config or RAGConfig()
 
-    # ── Public API ─────────────────────────────────────────────────────
-
     def query(
         self,
         query: str,
@@ -106,26 +86,13 @@ class RAGRuntime:
         trace = QueryTrace(query=query)
         t_total = time.perf_counter()
 
-        # ── 1. LTM cache check ─────────────────────────────────────────
-        mem_ctx = self._memory.before_query(query)
-        if mem_ctx.has_ltm_hit:
-            hit = mem_ctx.ltm_hit
-            trace.cache_hit = True
-            trace.complete_generation(hit.answer, latency_ms=0)
-            if self._trace_store:
-                self._trace_store.append(trace)
-            return RAGResponse(
-                answer=hit.answer,
-                context=hit.context,
-                citations=[],
-                trace=trace,
-                from_cache=True,
-            )
+        # ── 1. Memory context ─────────────────────────────────────────
+        mem_ctx = self._memory.before_query(query) if self._memory else MemoryContext([], [])
 
         # ── 2. Routing ─────────────────────────────────────────────────
         route_decision = None
         if self._router:
-            route_decision = self._router.route(query, self._memory.working)
+            route_decision = self._router.route(query)
             trace.route = route_decision.strategy
             trace.route_policy_scores = {
                 s.policy_name: round(s.score, 3)
@@ -143,10 +110,6 @@ class RAGRuntime:
         trace.retrieval_latency = round((time.perf_counter() - t0) * 1000, 1)
         trace.recalled_count = len(recalled)
         trace.recalled_docs = [_doc_summary(d) for d in recalled[:self._cfg.trace.recalled_docs_cap]]
-
-        if self._memory.working.active:
-            for doc in recalled:
-                self._memory.working.retrieval.add_retrieved(doc.identity)
 
         # ── 4. Rerank ──────────────────────────────────────────────────
         t0 = time.perf_counter()
@@ -171,10 +134,13 @@ class RAGRuntime:
         trace.citations = built.citations
 
         # ── 7. Generate ────────────────────────────────────────────────
+        session_ctx = self._memory.short_term.get_context_str() if self._memory else ""
         messages = self._prompt_manager.build_messages(
             history=mem_ctx.history_messages,
             context=built.context,
             question=query,
+            preferences=mem_ctx.preferences,
+            session_context=session_ctx,
         )
         trace.prompt_tokens = built.token_count
         trace.citations = built.citations
@@ -195,11 +161,13 @@ class RAGRuntime:
         t0 = time.perf_counter()
         answer = self._llm.chat(messages)
         trace.generation_latency = round((time.perf_counter() - t0) * 1000, 1)
+        trace.cached_prompt_tokens = self._llm.cached_prompt_tokens
+        trace.total_prompt_tokens = self._llm.total_prompt_tokens
         trace.complete_generation(answer, latency_ms=trace.generation_latency)
 
         # ── 8. Update memory ───────────────────────────────────────────
-        self._memory.after_query(query, built.context, answer)
-        trace.metadata["ltm_entry_id"] = ""
+        if self._memory:
+            self._memory.after_query(query, built.context, answer)
 
         # ── 9. Save trace ──────────────────────────────────────────────
         trace.metadata["total_latency_ms"] = round(
@@ -213,21 +181,9 @@ class RAGRuntime:
             context=built.context,
             citations=built.citations,
             trace=trace,
-            from_cache=False,
         )
 
-    # ── Internal ───────────────────────────────────────────────────────
-
-    def _apply_route(self, decision) -> None:
-        from RAG.retrievers import HybridRetrievalConfig
-        base = self._retriever.config
-        self._retriever.config = HybridRetrievalConfig(
-            dense_top_k=base.dense_top_k,
-            sparse_top_k=base.sparse_top_k,
-            final_top_k=base.final_top_k,
-            fusion=base.fusion,
-            rrf_k=base.rrf_k,
-            dense_weight=decision.dense_weight,
-            sparse_weight=decision.sparse_weight,
-            parallel=base.parallel,
-        )
+    def _apply_route(self, route_decision) -> None:
+        """Apply route-selected weights to the hybrid retriever config."""
+        self._retriever.config.dense_weight = route_decision.dense_weight
+        self._retriever.config.sparse_weight = route_decision.sparse_weight

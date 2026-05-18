@@ -3,14 +3,15 @@
 
 from __future__ import annotations
 
-import math
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
+import bm25s
 import numpy as np
+from bm25s.tokenization import Tokenizer
 
 from RAG.index.base import VectorIndex
 from RAG.schema import Document
@@ -77,11 +78,15 @@ class BM25Retriever:
         self.documents = list(documents)
         self.k1 = k1
         self.b = b
-        self.doc_tokens = [self._tokenize(doc.text) for doc in self.documents]
-        self.doc_len = [len(tokens) for tokens in self.doc_tokens]
-        self.avgdl = sum(self.doc_len) / max(len(self.doc_len), 1)
-        self.term_freqs = [Counter(tokens) for tokens in self.doc_tokens]
-        self.idf = self._build_idf(self.doc_tokens)
+        self._tokenizer = Tokenizer(
+            lower=False,
+            stopwords=[],
+            splitter=self._tokenize,
+        )
+        corpus_texts = [doc.text for doc in self.documents]
+        corpus_tokens = self._tokenizer.tokenize(corpus_texts)
+        self._retriever = bm25s.BM25(k1=k1, b=b)
+        self._retriever.index(corpus_tokens)
 
     def retrieve(
         self,
@@ -89,45 +94,22 @@ class BM25Retriever:
         top_k: int = 20,
         metadata_filter: Optional[Dict[str, object]] = None,
     ) -> List[Document]:
-        query_terms = self._tokenize(query)
-        scores = []
-        for idx, doc in enumerate(self.documents):
+        search_k = top_k * 4 if metadata_filter else top_k
+        query_tokens = self._tokenizer.tokenize([query], update_vocab=False)
+        results, scores = self._retriever.retrieve(query_tokens, k=search_k)
+        candidates: List[Document] = []
+        for idx, score in zip(results[0], scores[0]):
+            doc = self.documents[int(idx)]
             if metadata_filter and not all(
                 doc.metadata.get(key) == value for key, value in metadata_filter.items()
             ):
                 continue
-            score = self._score(query_terms, idx)
-            if score > 0:
-                scores.append((idx, score))
-        scores.sort(key=lambda item: item[1], reverse=True)
-        return [
-            Document(text=self.documents[idx].text, score=float(score), metadata=dict(self.documents[idx].metadata))
-            for idx, score in scores[:top_k]
-        ]
-
-    def _score(self, query_terms: List[str], idx: int) -> float:
-        score = 0.0
-        freqs = self.term_freqs[idx]
-        dl = self.doc_len[idx]
-        for term in query_terms:
-            if term not in freqs:
-                continue
-            tf = freqs[term]
-            idf = self.idf.get(term, 0.0)
-            denom = tf + self.k1 * (1 - self.b + self.b * dl / max(self.avgdl, 1e-9))
-            score += idf * (tf * (self.k1 + 1)) / denom
-        return score
-
-    def _build_idf(self, tokenized_docs: Sequence[List[str]]) -> Dict[str, float]:
-        doc_freq = defaultdict(int)
-        total = len(tokenized_docs)
-        for tokens in tokenized_docs:
-            for term in set(tokens):
-                doc_freq[term] += 1
-        return {
-            term: math.log(1 + (total - freq + 0.5) / (freq + 0.5))
-            for term, freq in doc_freq.items()
-        }
+            candidates.append(
+                Document(text=doc.text, score=float(score), metadata=dict(doc.metadata))
+            )
+            if len(candidates) >= top_k:
+                break
+        return candidates
 
     def _tokenize(self, text: str) -> List[str]:
         lowered = text.lower()

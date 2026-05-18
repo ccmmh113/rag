@@ -1,0 +1,228 @@
+[
+  {
+    "id": "Q001",
+    "question": "TinyRAG 的端到端 RAG 链路包含哪些阶段？",
+    "ground_truth": "TinyRAG 链路包括文档读取、父子分块、embedding、FAISS 稠密检索、BM25 稀疏检索、混合召回、候选清洗、reranker、上下文压缩、ContextBuilder、PromptManager、LLM 生成和 trace 记录。",
+    "qa_type": "list",
+    "source": "eval_01_rag_pipeline_and_chunking.md",
+    "anchor": "EVAL-RAG-001",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q002",
+    "question": "为什么 parent-child chunking 能同时兼顾召回精度和上下文完整性？",
+    "ground_truth": "child chunk 用于精准检索，parent chunk 用于给 LLM 提供更完整上下文。这样既避免大块召回不准，也避免小块生成时语义不完整。",
+    "qa_type": "why",
+    "source": "eval_01_rag_pipeline_and_chunking.md",
+    "anchor": "EVAL-RAG-002",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q003",
+    "question": "chunk_uid 相比 doc_id:source:chunk_id 解决了什么问题？",
+    "ground_truth": "chunk_uid 解决父子分块下不同 parent 的 child chunk 可能重复编号的问题，使评测 relevant_ids、引用定位和旧向量复用更稳定。",
+    "qa_type": "why",
+    "source": "eval_01_rag_pipeline_and_chunking.md",
+    "anchor": "EVAL-RAG-003",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q004",
+    "question": "BM25 更适合检索哪些类型的内容？",
+    "ground_truth": "BM25 更适合检索函数名、配置项、错误码、类名、字段名、英文缩写和专有名词等精确 token。",
+    "qa_type": "list",
+    "source": "eval_02_hybrid_retrieval_bm25_dense.md",
+    "anchor": "EVAL-RET-001",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q005",
+    "question": "为什么向量检索适合回答“不能只用很小分块给模型回答”这类问题？",
+    "ground_truth": "因为 dense retrieval 能根据语义召回与上下文不完整、语义切割、小块生成信息不足相关的内容，即使 query 和文档字面不同。",
+    "qa_type": "why",
+    "source": "eval_02_hybrid_retrieval_bm25_dense.md",
+    "anchor": "EVAL-RET-002",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q006",
+    "question": "RRF 为什么不直接比较 BM25 分数和向量相似度？",
+    "ground_truth": "因为 BM25 和向量相似度的原始分数尺度不同，RRF 根据排名融合结果，更稳定，不需要强制统一分数尺度。",
+    "qa_type": "why",
+    "source": "eval_02_hybrid_retrieval_bm25_dense.md",
+    "anchor": "EVAL-RET-003",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q007",
+    "question": "增量 embedding 和增量 index update 有什么区别？",
+    "ground_truth": "增量 embedding 是少算向量，未变化 chunk 复用旧 embedding；增量 index update 是少改索引，新增、修改、删除向量直接在索引中 upsert/delete。",
+    "qa_type": "compare",
+    "source": "eval_03_vector_index_incremental_faiss.md",
+    "anchor": "EVAL-IDX-001",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q008",
+    "question": "index manifest 记录哪些信息，用来判断什么？",
+    "ground_truth": "manifest 记录文件路径、文件大小、文件 SHA1、分块参数和 schema version，用来判断知识库或分块配置是否变化，决定是否复用旧索引。",
+    "qa_type": "list",
+    "source": "eval_03_vector_index_incremental_faiss.md",
+    "anchor": "EVAL-IDX-002",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q009",
+    "question": "RAG_INDEX_STALE 表示什么错误？",
+    "ground_truth": "RAG_INDEX_STALE 表示 manifest 和磁盘索引不一致，文档或分块配置已经变化，需要刷新或重建索引。",
+    "qa_type": "definition",
+    "source": "eval_03_vector_index_incremental_faiss.md",
+    "anchor": "EVAL-IDX-004",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q010",
+    "question": "_prepare_rerank_candidates 在 reranker 前做了哪些清洗？",
+    "ground_truth": "它过滤空文本，按 identity 去重保留更高 score 的候选，限制同一 parent_id 下的 child 数量，并限制送入 reranker 的候选总数。",
+    "qa_type": "list",
+    "source": "eval_04_reranker_context_budget.md",
+    "anchor": "EVAL-CTX-001",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q011",
+    "question": "候选清洗为什么不能代替 reranker？",
+    "ground_truth": "候选清洗只根据空文本、重复、parent 数量等结构信息做保守处理；reranker 会结合 query 和 document 计算交互相关性，因此能更准确判断内容是否回答问题。",
+    "qa_type": "why",
+    "source": "eval_04_reranker_context_budget.md",
+    "anchor": "EVAL-CTX-002",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q012",
+    "question": "为什么不能用 RRF 分数直接和 relevance_threshold=0.3 比较？",
+    "ground_truth": "RRF 分数通常很小，尺度和 reranker 分数不同。ContextCompressor 只在有 rerank_score 时使用绝对阈值，避免误删所有文档。",
+    "qa_type": "why",
+    "source": "eval_04_reranker_context_budget.md",
+    "anchor": "EVAL-CTX-003",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q013",
+    "question": "ContextBuilder 没有 embedding_model 时如何做语义去重兜底？",
+    "ground_truth": "如果传入 embedding_model，就用 embedding cosine similarity；如果没有 embedding_model，则用 Jaccard 词集合相似度作为兜底。",
+    "qa_type": "definition",
+    "source": "eval_04_reranker_context_budget.md",
+    "anchor": "EVAL-CTX-004",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q014",
+    "question": "ContextBuilder 的 token budget 控制顺序是什么？",
+    "ground_truth": "先做父块去重、exact dedup、semantic dedup，再计算 header token 和可用 token，截断文本，追加 citation。",
+    "qa_type": "list",
+    "source": "eval_04_reranker_context_budget.md",
+    "anchor": "EVAL-CTX-005",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q015",
+    "question": "FastAPI 的 /api/index/build 接口负责什么？",
+    "ground_truth": "POST /api/index/build 用于触发索引构建或更新，Web 层由 RuntimeManager 懒加载 embedding、索引、reranker 和 RAGRuntime。",
+    "qa_type": "definition",
+    "source": "eval_05_fastapi_vue_code.md",
+    "anchor": "EVAL-WEB-001",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q016",
+    "question": "UNSUPPORTED_FILE_TYPE 在上传接口里什么时候返回？",
+    "ground_truth": "当上传文件后缀不是 .md、.txt 或 .pdf 时，/api/files/upload 会返回 UNSUPPORTED_FILE_TYPE。",
+    "qa_type": "definition",
+    "source": "eval_05_fastapi_vue_code.md",
+    "anchor": "EVAL-WEB-002",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q017",
+    "question": "Vue 的 saveConfig 方法会提交哪些检索配置？",
+    "ground_truth": "saveConfig 会提交 dense_weight、sparse_weight、use_reranker 和 fusion 等配置到 PATCH /api/config。",
+    "qa_type": "list",
+    "source": "eval_05_fastapi_vue_code.md",
+    "anchor": "EVAL-WEB-003",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q018",
+    "question": "检索评估应该比较哪些组？",
+    "ground_truth": "应该比较 Dense only、BM25 only、Hybrid RRF、Hybrid Weighted、Hybrid + Reranker 和 Full Pipeline 等组。",
+    "qa_type": "list",
+    "source": "eval_06_trace_evaluation_report.md",
+    "anchor": "EVAL-EVAL-001",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q019",
+    "question": "为什么应该先跑检索评估，再跑生成评估？",
+    "ground_truth": "如果检索不稳定，生成错误可能来自召回失败、排序失败、压缩误删或 LLM 幻觉，难以定位；先稳定检索评估有助于归因。",
+    "qa_type": "why",
+    "source": "eval_06_trace_evaluation_report.md",
+    "anchor": "EVAL-EVAL-002",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q020",
+    "question": "一次问答 trace 建议记录哪些字段？",
+    "ground_truth": "trace 建议记录 query、route、policy scores、recalled_docs、rerank_candidate_count、rerank_candidate_dropped、reranked_count、各阶段 latency、prompt_tokens、citations 和 answer_preview。",
+    "qa_type": "list",
+    "source": "eval_06_trace_evaluation_report.md",
+    "anchor": "EVAL-EVAL-003",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q021",
+    "question": "retrieval_miss 和 ranking_error 有什么区别？",
+    "ground_truth": "retrieval_miss 是召回阶段没有取到证据；ranking_error 是召回有证据，但排序太靠后，没有进入最终上下文。",
+    "qa_type": "compare",
+    "source": "eval_06_trace_evaluation_report.md",
+    "anchor": "EVAL-EVAL-004",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q022",
+    "question": "Agent memory 和 RAG 向量索引里的 memory 有什么不同？",
+    "ground_truth": "Agent memory 保存用户偏好、历史任务、失败经验和流程；RAG 向量索引用于按 query 检索外部知识片段，两者不是同一个概念。",
+    "qa_type": "compare",
+    "source": "eval_07_agent_memory_distractors.md",
+    "anchor": "EVAL-DIST-001",
+    "retrieval_focus": "semantic"
+  },
+  {
+    "id": "Q023",
+    "question": "_vector_cache_from_state 的作用是什么？",
+    "ground_truth": "_vector_cache_from_state 从旧索引状态和 vectors.npy 中构造向量缓存，用于复用未变化 chunk 的 embedding。",
+    "qa_type": "definition",
+    "source": "eval_08_code_error_playbook.md",
+    "anchor": "EVAL-CODE-001",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q024",
+    "question": "RAG_VECTOR_DIM_MISMATCH 怎么处理？",
+    "ground_truth": "RAG_VECTOR_DIM_MISMATCH 表示向量维度和 FAISS 索引维度不一致，应该检查 embedding 模型、索引配置或重建索引。",
+    "qa_type": "definition",
+    "source": "eval_08_code_error_playbook.md",
+    "anchor": "EVAL-CODE-003",
+    "retrieval_focus": "exact"
+  },
+  {
+    "id": "Q025",
+    "question": "max_candidates_per_parent 的作用是什么？",
+    "ground_truth": "max_candidates_per_parent 限制同一个 parent_id 下送入 reranker 的 child 数量，避免一个父块占满候选集。",
+    "qa_type": "definition",
+    "source": "eval_08_code_error_playbook.md",
+    "anchor": "EVAL-CODE-004",
+    "retrieval_focus": "exact"
+  }
+]
+

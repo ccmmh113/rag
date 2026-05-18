@@ -244,18 +244,21 @@ class RAGEvaluator:
 
     def evaluate_system(self, traces: List["QueryTrace"]) -> SystemMetrics:
         if not traces:
-            return SystemMetrics(0, 0, 0, 0)
-
-        non_cached = [t for t in traces if not t.cache_hit]
-        cache_rate = sum(1 for t in traces if t.cache_hit) / len(traces)
+            return SystemMetrics(0, 0, 0, 0, 0, 0)
 
         def avg(seq):
             return sum(seq) / len(seq) if seq else 0.0
 
+        total_prompt = sum(t.total_prompt_tokens for t in traces)
+        total_cached = sum(t.cached_prompt_tokens for t in traces)
+        cache_rate = total_cached / total_prompt if total_prompt > 0 else 0.0
+
         return SystemMetrics(
-            avg_retrieval_latency_ms=avg([t.retrieval_latency for t in non_cached]),
+            avg_retrieval_latency_ms=avg([t.retrieval_latency for t in traces]),
             avg_generation_latency_ms=avg([t.generation_latency for t in traces]),
-            cache_hit_rate=cache_rate,
+            llm_cache_rate=cache_rate,
+            avg_cached_prompt_tokens=avg([t.cached_prompt_tokens for t in traces]),
+            avg_total_prompt_tokens=avg([t.total_prompt_tokens for t in traces]),
             total_traces=len(traces),
         )
 
@@ -314,12 +317,18 @@ class RAGEvaluator:
         try:
             raw = self._judge.chat([{"role": "user", "content": prompt}])
             data = self._parse_json_response(raw)
+            # _parse_json_response may wrap a single dict in a list
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            if not isinstance(data, dict):
+                print(f"  [JUDGE] unexpected type: {type(data).__name__}, raw[:200]={raw[:200]}")
+                return default
             val = float(data.get(field, default))
-            if val == default and not data:
-                print(f"  [JUDGE] {field}: raw={raw[:200]}")
+            if val == default and field not in data:
+                print(f"  [JUDGE] {field} missing, raw[:200]={raw[:200]}")
             return val
-        except Exception as exc:
-            print(f"  [JUDGE] {field} failed: {exc}, raw[:200]={raw[:200] if 'raw' in dir() else 'N/A'}")
+        except (ValueError, TypeError) as exc:
+            print(f"  [JUDGE] {field} parse error: {exc}, raw[:200]={raw[:200] if 'raw' in dir() else 'N/A'}")
             return default
 
     # ═════════════════════════════════════════════════════════════════════
@@ -372,7 +381,7 @@ class RAGEvaluator:
         m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if m:
             text = m.group(1).strip()
-        for bracket in [("[", "]"), ("{", "}")]:
+        for bracket in [("{", "}"), ("[", "]")]:
             start = text.find(bracket[0])
             if start == -1:
                 continue

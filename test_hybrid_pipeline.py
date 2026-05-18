@@ -7,6 +7,7 @@ All tests are self-contained: no API keys, no file I/O.
 FakeEmbedding and FakeLLM replace real providers.
 """
 
+import tempfile
 import unittest
 
 import numpy as np
@@ -65,7 +66,7 @@ DOCS = [
 ]
 
 
-def _make_runtime() -> RAGRuntime:
+def _make_runtime():
     embedding = FakeEmbedding()
     vectors = [embedding.get_embedding(d.text) for d in DOCS]
     index = FaissVectorIndex(dimension=len(vectors[0]))
@@ -75,7 +76,8 @@ def _make_runtime() -> RAGRuntime:
         BM25Retriever(DOCS),
         HybridRetrievalConfig(dense_top_k=4, sparse_top_k=4, final_top_k=4),
     )
-    memory = MemoryManager(db_path=":memory:", index=FaissVectorIndex(dimension=3), embedding_model=embedding)
+    tmpdir = tempfile.mkdtemp()
+    memory = MemoryManager(db_path=tmpdir, embedding_model=embedding)
     runtime = RAGRuntime(
         retriever=retriever,
         context_builder=ContextBuilder(ContextBuilderConfig(max_tokens=2000)),
@@ -83,7 +85,6 @@ def _make_runtime() -> RAGRuntime:
         prompt_manager=PromptManager(),
         memory=memory,
     )
-    runtime._memory.working.new_session()
     return runtime
 
 
@@ -102,11 +103,6 @@ class TestRAGRuntimeBasic(unittest.TestCase):
         resp = self.runtime.query("git commit")
         self.assertIsInstance(resp.answer, str)
         self.assertTrue(len(resp.answer) > 0)
-
-    def test_not_from_cache_on_first_query(self):
-        rt = _make_runtime()
-        resp = rt.query("python list")
-        self.assertFalse(resp.from_cache)
 
     def test_context_contains_source_header(self):
         resp = self.runtime.query("git branch 分支")
@@ -157,15 +153,6 @@ class TestRAGRuntimeTrace(unittest.TestCase):
     def test_trace_prompt_tokens(self):
         self.assertGreater(self.resp.trace.prompt_tokens, 0)
 
-    def test_trace_has_ltm_entry_id(self):
-        self.assertIn("ltm_entry_id", self.resp.trace.metadata)
-
-    def test_ltm_entry_id_is_empty_on_first_query(self):
-        """LTM is no longer auto-populated — entry_id is empty string."""
-        rt = _make_runtime()
-        resp = rt.query("git 版本控制")
-        self.assertEqual(resp.trace.metadata["ltm_entry_id"], "")
-
 
 class TestRAGRuntimeMemory(unittest.TestCase):
     def test_short_term_accumulates_turns(self):
@@ -174,64 +161,74 @@ class TestRAGRuntimeMemory(unittest.TestCase):
         rt.query("git commit")
         self.assertEqual(len(rt._memory.short_term), 2)
 
-    def test_working_memory_increments_query_count(self):
+    def test_session_context_set_get(self):
         rt = _make_runtime()
-        rt.query("git 分支")
-        rt.query("git 提交")
-        self.assertEqual(rt._memory.working.retrieval.query_count, 2)
+        rt._memory.short_term.set_context("project", "test_project")
+        ctx_str = rt._memory.short_term.get_context_str()
+        self.assertIn("project: test_project", ctx_str)
 
-    def test_new_session_resets_working_state(self):
+    def test_session_context_empty(self):
         rt = _make_runtime()
-        rt.query("git branch")
-        rt._memory.working.new_session()
-        self.assertEqual(rt._memory.working.retrieval.query_count, 0)
+        self.assertEqual(rt._memory.short_term.get_context_str(), "")
 
 
-class TestRAGRuntimeLTMManual(unittest.TestCase):
-    """Long-term memory requires explicit user action to save."""
-
-    def test_save_last_turn_returns_id(self):
-        rt = _make_runtime()
-        rt.query("git branch 分支管理")
-        entry_id = rt._memory.save_last_turn()
-        self.assertIsNotNone(entry_id)
-        self.assertTrue(len(entry_id) > 0)
-
-    def test_save_last_turn_without_turns_returns_none(self):
-        rt = _make_runtime()
-        entry_id = rt._memory.save_last_turn()
-        self.assertIsNone(entry_id)
-
-    def test_ltm_cache_hit_after_save(self):
-        rt = _make_runtime()
-        rt.query("git branch 分支管理")
-        rt._memory.save_last_turn()
-        resp = rt.query("git branch 分支管理")
-        self.assertTrue(resp.from_cache)
-
-    def test_save_last_turn_dedup(self):
-        rt = _make_runtime()
-        rt.query("git branch 分支管理")
-        first = rt._memory.save_last_turn()
-        self.assertIsNotNone(first)
-        # Same query again should be dedup'd
-        rt.query("git branch 分支管理")
-        second = rt._memory.save_last_turn()
-        self.assertIsNone(second)
+class TestRAGRuntimeLTM(unittest.TestCase):
+    """Long-term memory with Chroma backend."""
 
     def test_save_note_returns_id(self):
         rt = _make_runtime()
-        entry_id = rt._memory.save_note("RAG 系统使用 FAISS 做向量检索")
+        entry_id = rt._memory.save("RAG 系统使用 Chroma 做向量存储")
         self.assertIsNotNone(entry_id)
         self.assertTrue(len(entry_id) > 0)
 
-    def test_save_note_dedup(self):
+    def test_save_note_overwrite_similar(self):
         rt = _make_runtime()
-        note = "长期记忆需要用户手动保存"
-        first = rt._memory.save_note(note)
-        self.assertIsNotNone(first)
-        second = rt._memory.save_note(note)
-        self.assertIsNone(second)
+        first = rt._memory.save("长期记忆支持覆盖更新")
+        second = rt._memory.save("长期记忆支持覆盖更新")
+        self.assertEqual(first, second)
+
+    def test_save_preference(self):
+        rt = _make_runtime()
+        entry_id = rt._memory.save("我是后端开发者", "preference")
+        self.assertIsNotNone(entry_id)
+
+    def test_list_all(self):
+        rt = _make_runtime()
+        rt._memory.save("git")
+        entries = rt._memory.list_all()
+        self.assertEqual(len(entries), 1)
+        rt._memory.save("git")  # same content → overwrite
+        entries = rt._memory.list_all()
+        self.assertEqual(len(entries), 1)
+
+    def test_save_two_different_notes(self):
+        rt = _make_runtime()
+        rt._memory.save("git git")       # [2, 0, 0]
+        rt._memory.save("分支 分支")      # [0, 2, 5], cosine ≈ 0 with [2,0,0]
+        entries = rt._memory.list_all()
+        self.assertEqual(len(entries), 2)
+
+    def test_list_filter_by_type(self):
+        rt = _make_runtime()
+        rt._memory.save("一条笔记")
+        rt._memory.save("偏好内容", "preference")
+        notes = rt._memory.list_all("note")
+        prefs = rt._memory.list_all("preference")
+        self.assertGreaterEqual(len(notes), 1)
+        self.assertGreaterEqual(len(prefs), 1)
+
+    def test_forget(self):
+        rt = _make_runtime()
+        entry_id = rt._memory.save("待删除内容")
+        self.assertEqual(len(rt._memory.list_all()), 1)
+        rt._memory.forget(entry_id)
+        self.assertEqual(len(rt._memory.list_all()), 0)
+
+    def test_preferences_flow_to_prompt(self):
+        rt = _make_runtime()
+        rt._memory.save("我使用 Python", "preference")
+        mem_ctx = rt._memory.before_query("git 分支")
+        self.assertIn("我使用 Python", mem_ctx.preferences)
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ share/python-wheels/
 MANIFEST
 # Python
 
-
+benchmark/
 # IDE
 .idea/
 .vscode/
