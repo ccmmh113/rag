@@ -68,7 +68,7 @@ class RAGEvaluator:
             retrieved_docs = retriever_fn(question)
             elapsed = (time.perf_counter() - t0) * 1000
 
-            retrieved_ids = [self._doc_id(d) for d in retrieved_docs[:k]]
+            retrieved_ids = [self._doc_ids(d) for d in retrieved_docs[:k]]
 
             cp = self._context_precision_at_k(retrieved_ids, relevant_ids, k)
             cr = self._context_recall(retrieved_ids, relevant_ids)
@@ -81,7 +81,11 @@ class RAGEvaluator:
             rr_scores.append(rr)
             latencies.append(elapsed)
 
-            hit_ranks = [i + 1 for i, rid in enumerate(retrieved_ids) if rid in relevant_ids]
+            hit_ranks = [
+                i + 1
+                for i, ids in enumerate(retrieved_ids)
+                if self._matches(ids, relevant_ids)
+            ]
             details.append({
                 "question": question[:100],
                 "context_precision": round(cp, 4),
@@ -114,36 +118,44 @@ class RAGEvaluator:
             details=details,
         )
 
-    def _context_precision_at_k(self, retrieved: List[str], relevant: set, k: int) -> float:
+    def _context_precision_at_k(self, retrieved: List[set], relevant: set, k: int) -> float:
         """Average Precision @ k. Rewards relevant chunks appearing early."""
         if not relevant:
             return 0.0
         score = 0.0
         hits = 0
-        for i, rid in enumerate(retrieved[:k]):
-            if rid in relevant:
+        seen = set()
+        for i, ids in enumerate(retrieved[:k]):
+            key = tuple(sorted(ids))
+            if key in seen:
+                continue
+            seen.add(key)
+            if self._matches(ids, relevant):
                 hits += 1
                 score += hits / (i + 1)
         return score / min(len(relevant), k) if relevant else 0.0
 
-    def _context_recall(self, retrieved: List[str], relevant: set) -> float:
+    def _context_recall(self, retrieved: List[set], relevant: set) -> float:
         """Fraction of relevant chunks that appear in retrieved results."""
         if not relevant:
             return 0.0
-        return len(set(retrieved) & relevant) / len(relevant)
+        matched = set()
+        for ids in retrieved:
+            matched.update(ids & relevant)
+        return len(matched) / len(relevant)
 
     @staticmethod
-    def _hit_at_k(retrieved: List[str], relevant: set) -> float:
+    def _hit_at_k(retrieved: List[set], relevant: set) -> float:
         """1 if at least one relevant doc in top-K, else 0."""
         if not relevant:
             return 0.0
-        return 1.0 if any(rid in relevant for rid in retrieved) else 0.0
+        return 1.0 if any(ids & relevant for ids in retrieved) else 0.0
 
     @staticmethod
-    def _reciprocal_rank(retrieved: List[str], relevant: set) -> float:
+    def _reciprocal_rank(retrieved: List[set], relevant: set) -> float:
         """1 / rank of first relevant doc; 0 if none found."""
-        for i, rid in enumerate(retrieved):
-            if rid in relevant:
+        for i, ids in enumerate(retrieved):
+            if ids & relevant:
                 return 1.0 / (i + 1)
         return 0.0
 
@@ -368,12 +380,21 @@ class RAGEvaluator:
     # ═════════════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _doc_id(doc: "Document") -> str:
-        if hasattr(doc, "identity"):
-            return doc.identity
+    def _doc_ids(doc: "Document") -> set[str]:
         if isinstance(doc, str):
-            return doc
-        return ""
+            return {doc}
+        ids = set()
+        if hasattr(doc, "identity"):
+            ids.add(doc.identity)
+        metadata = getattr(doc, "metadata", {}) or {}
+        legacy = metadata.get("legacy_identity")
+        if legacy:
+            ids.add(str(legacy))
+        return {item for item in ids if item}
+
+    @staticmethod
+    def _matches(ids: set[str], relevant: set) -> bool:
+        return bool(ids & relevant)
 
     @staticmethod
     def _parse_json_response(raw: str) -> Dict[str, Any]:

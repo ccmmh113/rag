@@ -94,7 +94,10 @@ class BM25Retriever:
         top_k: int = 20,
         metadata_filter: Optional[Dict[str, object]] = None,
     ) -> List[Document]:
+        if not self.documents:
+            return []
         search_k = top_k * 4 if metadata_filter else top_k
+        search_k = min(search_k, len(self.documents))
         query_tokens = self._tokenizer.tokenize([query], update_vocab=False)
         results, scores = self._retriever.retrieve(query_tokens, k=search_k)
         candidates: List[Document] = []

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TinyRAG Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">TR</span>
+          <div>
+            <strong>TinyRAG</strong>
+            <small>Console</small>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button :class="{ active: view === 'chat' }" @click="view = 'chat'">Chat</button>
+          <button :class="{ active: view === 'traces' }" @click="openTraces">Trace</button>
+          <button :class="{ active: view === 'memory' }" @click="openMemory">Memory</button>
+          <button :class="{ active: view === 'config' }" @click="view = 'config'">Config</button>
+        </nav>
+
+        <section class="status">
+          <span :class="['dot', status.ready ? 'ok' : 'warn']"></span>
+          <span>{{ status.ready ? 'Runtime Ready' : 'Runtime Lazy' }}</span>
+        </section>
+        <dl class="mini-stats">
+          <div><dt>Docs</dt><dd>{{ status.docs_count || 0 }}</dd></div>
+          <div><dt>Index</dt><dd>{{ status.index_type || '-' }}</dd></div>
+          <div><dt>Model</dt><dd>{{ status.chat_model || '-' }}</dd></div>
+        </dl>
+        <p v-if="status.last_error" class="error-text">{{ status.last_error }}</p>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>{{ pageTitle }}</h1>
+            <p>{{ pageSubtitle }}</p>
+          </div>
+          <button class="ghost" @click="refreshStatus">Refresh</button>
+        </header>
+
+        <section v-if="view === 'chat'" class="chat-layout">
+          <div class="chat-main">
+            <div class="messages">
+              <article v-for="item in messages" :key="item.id" :class="['message', item.role]">
+                <div class="message-meta">{{ item.role === 'user' ? 'You' : 'TinyRAG' }}</div>
+                <div class="message-body">{{ item.content }}</div>
+              </article>
+              <div v-if="!messages.length" class="empty">
+                <strong>Ask your knowledge base</strong>
+                <span>答案、引用和 Trace 会在同一个工作台里展开。</span>
+              </div>
+            </div>
+
+            <form class="composer" @submit.prevent="sendQuestion">
+              <textarea v-model="question" placeholder="输入一个问题，比如：这个项目的混合检索怎么工作？"></textarea>
+              <button :disabled="loading || !question.trim()">{{ loading ? 'Thinking' : 'Send' }}</button>
+            </form>
+          </div>
+
+          <aside class="inspect-panel">
+            <div class="panel-head">
+              <h2>Citations</h2>
+              <span>{{ citations.length }}</span>
+            </div>
+            <div class="citation-list">
+              <article v-for="(item, idx) in citations" :key="idx" class="citation">
+                <strong>{{ item.source || 'unknown' }}</strong>
+                <span>{{ item.section || 'Document' }}</span>
+                <small>chunk {{ item.chunk_id }} · score {{ formatScore(item.rerank_score ?? item.score) }}</small>
+              </article>
+              <p v-if="!citations.length" class="muted">暂无引用。</p>
+            </div>
+
+            <div class="panel-head trace-head">
+              <h2>Last Trace</h2>
+              <span>{{ lastTrace.trace_id || '-' }}</span>
+            </div>
+            <dl class="trace-grid">
+              <div><dt>Route</dt><dd>{{ lastTrace.route || '-' }}</dd></div>
+              <div><dt>Recall</dt><dd>{{ lastTrace.recalled_count ?? '-' }}</dd></div>
+              <div><dt>Rerank</dt><dd>{{ lastTrace.reranked_count ?? '-' }}</dd></div>
+              <div><dt>Tokens</dt><dd>{{ lastTrace.prompt_tokens ?? '-' }}</dd></div>
+              <div><dt>Retrieve</dt><dd>{{ lastTrace.retrieval_latency ?? '-' }} ms</dd></div>
+              <div><dt>Generate</dt><dd>{{ lastTrace.generation_latency ?? '-' }} ms</dd></div>
+            </dl>
+          </aside>
+        </section>
+
+        <section v-if="view === 'traces'" class="table-view">
+          <div class="metric-row">
+            <div><span>Cache Rate</span><strong>{{ percent(traceStats.llm_cache_rate) }}</strong></div>
+            <div><span>Retrieval</span><strong>{{ formatMs(traceStats.latency?.retrieval_ms) }}</strong></div>
+            <div><span>Rerank</span><strong>{{ formatMs(traceStats.latency?.rerank_ms) }}</strong></div>
+            <div><span>Generation</span><strong>{{ formatMs(traceStats.latency?.generation_ms) }}</strong></div>
+          </div>
+          <article v-for="trace in traces" :key="trace.trace_id" class="trace-item">
+            <header>
+              <strong>{{ trace.query }}</strong>
+              <span>{{ trace.trace_id }}</span>
+            </header>
+            <dl class="trace-grid compact">
+              <div><dt>Route</dt><dd>{{ trace.route || '-' }}</dd></div>
+              <div><dt>Recall</dt><dd>{{ trace.recalled_count }}</dd></div>
+              <div><dt>Rerank</dt><dd>{{ trace.reranked_count }}</dd></div>
+              <div><dt>Tokens</dt><dd>{{ trace.prompt_tokens }}</dd></div>
+            </dl>
+            <p>{{ trace.answer_preview }}</p>
+          </article>
+          <p v-if="!traces.length" class="muted">还没有 Trace。先在 Chat 里问一次。</p>
+        </section>
+
+        <section v-if="view === 'memory'" class="memory-view">
+          <form class="memory-form" @submit.prevent="saveMemory">
+            <select v-model="memoryForm.entry_type">
+              <option value="note">note</option>
+              <option value="preference">preference</option>
+            </select>
+            <input v-model="memoryForm.content" placeholder="写入一条长期记忆或用户偏好" />
+            <button :disabled="!memoryForm.content.trim()">Save</button>
+          </form>
+          <article v-for="item in memories" :key="item.id" class="memory-item">
+            <div>
+              <strong>{{ item.entry_type }}</strong>
+              <p>{{ item.content }}</p>
+              <small>{{ item.id }}</small>
+            </div>
+            <button class="danger" @click="deleteMemory(item.id)">Delete</button>
+          </article>
+          <p v-if="!memories.length" class="muted">暂无长期记忆。</p>
+        </section>
+
+        <section v-if="view === 'config'" class="config-view">
+          <div class="config-grid">
+            <label>Dense top k<input type="number" v-model.number="configForm.dense_top_k" /></label>
+            <label>Sparse top k<input type="number" v-model.number="configForm.sparse_top_k" /></label>
+            <label>Final top k<input type="number" v-model.number="configForm.final_top_k" /></label>
+            <label>Reranker top k<input type="number" v-model.number="configForm.reranker_top_k" /></label>
+            <label>Context tokens<input type="number" v-model.number="configForm.context_max_tokens" /></label>
+            <label>Dense weight<input type="number" step="0.1" v-model.number="configForm.dense_weight" /></label>
+            <label>Sparse weight<input type="number" step="0.1" v-model.number="configForm.sparse_weight" /></label>
+            <label>Fusion
+              <select v-model="configForm.fusion">
+                <option value="rrf">rrf</option>
+                <option value="weighted">weighted</option>
+              </select>
+            </label>
+            <label>Index
+              <select v-model="configForm.index_type">
+                <option value="flat_ip">flat_ip</option>
+                <option value="hnsw">hnsw</option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" v-model="configForm.use_reranker" />
+              <span>Use reranker</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button @click="saveConfig">Apply Config</button>
+            <button class="ghost" @click="buildIndex">Build Index</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

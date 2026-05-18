@@ -260,7 +260,11 @@ class ParentChildChunker:
         for parent_doc in parent_docs:
             pdoc_id = parent_doc.metadata.get("doc_id", "")
             pchunk_id = parent_doc.metadata.get("chunk_id", 0)
-            parent_id = f"{pdoc_id}::{pchunk_id}"
+            page_part = page if page is not None else parent_doc.metadata.get("page")
+            source_key = hashlib.sha1(
+                os.path.normpath(source).encode("utf-8", errors="ignore")
+            ).hexdigest()[:8]
+            parent_id = f"{pdoc_id}::{source_key}::p{page_part or 0}::{pchunk_id}"
             parent_map[parent_id] = parent_doc.text
 
             children = self._child_chunker.chunk(
@@ -270,7 +274,13 @@ class ParentChildChunker:
                 page=page,
             )
             for child in children:
+                local_child_id = child.metadata.get("chunk_id", 0)
+                child.metadata["parent_chunk_id"] = pchunk_id
+                child.metadata["child_chunk_id"] = local_child_id
                 child.metadata["parent_id"] = parent_id
+                child.metadata["legacy_identity"] = f"{pdoc_id}:{source}:{local_child_id}"
+                child.metadata["chunk_uid"] = f"{parent_id}::c{local_child_id}"
+                child.metadata["chunk_id"] = len(child_docs)
                 child_docs.append(child)
 
         return child_docs, parent_map

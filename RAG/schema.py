@@ -31,10 +31,21 @@ class Document:
 
     @property
     def identity(self) -> str:
+        stable_id = self.metadata.get("chunk_uid") or self.metadata.get("identity")
+        if stable_id:
+            return str(stable_id)
+
         doc_id = self.metadata.get("doc_id", "")
         chunk_id = self.metadata.get("chunk_id", "")
         source = self.metadata.get("source", "")
-        return f"{doc_id}:{source}:{chunk_id}"
+        parent_id = self.metadata.get("parent_id")
+        child_chunk_id = self.metadata.get("child_chunk_id")
+        page = self.metadata.get("page")
+
+        if parent_id is not None:
+            child_id = child_chunk_id if child_chunk_id is not None else chunk_id
+            return f"{doc_id}:{source}:{page}:{parent_id}:{child_id}"
+        return f"{doc_id}:{source}:{page}:{chunk_id}"
 
     def to_dict(self) -> Dict[str, Any]:
         return {

@@ -28,13 +28,14 @@ class ReadFiles:
     def get_files(self):
         file_list = []
         for filepath, dirnames, filenames in os.walk(self._path):
+            dirnames.sort()
             for filename in filenames:
                 if filename.endswith((".md", ".txt", ".pdf")):
                     full = os.path.normpath(os.path.join(filepath, filename))
                     if full.startswith(".\\") or full.startswith("./"):
                         full = full[2:]
                     file_list.append(full)
-        return file_list
+        return sorted(file_list)
 
     def get_content(self, max_token_len: int = 600, cover_content: int = 150):
         """Return chunk texts for backward compatibility."""

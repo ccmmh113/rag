@@ -58,6 +58,8 @@ class RetrievalConfig:
 @dataclass
 class RerankerConfig:
     model_path: str = "BAAI/bge-reranker-base"
+    candidate_top_k: int = 30
+    max_candidates_per_parent: int = 2
     top_k: int = 8
     max_length: int = 512
 

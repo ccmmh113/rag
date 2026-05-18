@@ -15,6 +15,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from RAG.context.builder import ContextBuilder
@@ -111,29 +112,34 @@ class RAGRuntime:
         trace.recalled_count = len(recalled)
         trace.recalled_docs = [_doc_summary(d) for d in recalled[:self._cfg.trace.recalled_docs_cap]]
 
-        # ── 4. Rerank ──────────────────────────────────────────────────
+        # ── 4. Candidate cleanup ───────────────────────────────────────
+        candidates = self._prepare_rerank_candidates(recalled)
+        trace.metadata["rerank_candidate_count"] = len(candidates)
+        trace.metadata["rerank_candidate_dropped"] = max(0, len(recalled) - len(candidates))
+
+        # ── 5. Rerank ──────────────────────────────────────────────────
         t0 = time.perf_counter()
         if self._reranker:
             reranked = self._reranker.rerank_documents(
-                query, recalled, k=self._cfg.reranker.top_k
+                query, candidates, k=self._cfg.reranker.top_k
             )
         else:
-            reranked = recalled[: self._cfg.reranker.top_k]
+            reranked = candidates[: self._cfg.reranker.top_k]
         trace.rerank_latency = round((time.perf_counter() - t0) * 1000, 1)
         trace.reranked_count = len(reranked)
 
-        # ── 5. Compress ────────────────────────────────────────────────
+        # ── 6. Compress ────────────────────────────────────────────────
         if self._compressor:
             reranked = self._compressor.compress(
                 reranked, query, self._cfg.context.max_tokens
             )
 
-        # ── 6. Build context ───────────────────────────────────────────
+        # ── 7. Build context ───────────────────────────────────────────
         built = self._context_builder.build(reranked)
         trace.prompt_tokens = built.token_count
         trace.citations = built.citations
 
-        # ── 7. Generate ────────────────────────────────────────────────
+        # ── 8. Generate ────────────────────────────────────────────────
         session_ctx = self._memory.short_term.get_context_str() if self._memory else ""
         messages = self._prompt_manager.build_messages(
             history=mem_ctx.history_messages,
@@ -165,11 +171,11 @@ class RAGRuntime:
         trace.total_prompt_tokens = self._llm.total_prompt_tokens
         trace.complete_generation(answer, latency_ms=trace.generation_latency)
 
-        # ── 8. Update memory ───────────────────────────────────────────
+        # ── 9. Update memory ───────────────────────────────────────────
         if self._memory:
             self._memory.after_query(query, built.context, answer)
 
-        # ── 9. Save trace ──────────────────────────────────────────────
+        # ── 10. Save trace ─────────────────────────────────────────────
         trace.metadata["total_latency_ms"] = round(
             (time.perf_counter() - t_total) * 1000, 1
         )
@@ -187,3 +193,35 @@ class RAGRuntime:
         """Apply route-selected weights to the hybrid retriever config."""
         self._retriever.config.dense_weight = route_decision.dense_weight
         self._retriever.config.sparse_weight = route_decision.sparse_weight
+
+    def _prepare_rerank_candidates(self, documents: List["Document"]) -> List["Document"]:
+        """
+        Lightweight cleanup before cross-encoder reranking.
+
+        Keep this stage conservative: remove exact duplicate chunks and cap repeated
+        children from the same parent, but leave semantic relevance decisions to the
+        reranker/compressor where query-document interaction is available.
+        """
+        candidate_top_k = self._cfg.reranker.candidate_top_k
+        max_per_parent = max(1, self._cfg.reranker.max_candidates_per_parent)
+
+        unique_by_id: Dict[str, "Document"] = {}
+        for doc in documents:
+            if not doc.text.strip():
+                continue
+            current = unique_by_id.get(doc.identity)
+            if current is None or doc.score > current.score:
+                unique_by_id[doc.identity] = doc
+
+        ordered = sorted(unique_by_id.values(), key=lambda d: d.score, reverse=True)
+        parent_counts: Dict[str, int] = defaultdict(int)
+        cleaned: List["Document"] = []
+        for doc in ordered:
+            parent_key = doc.metadata.get("parent_id") or doc.identity
+            if parent_counts[parent_key] >= max_per_parent:
+                continue
+            parent_counts[parent_key] += 1
+            cleaned.append(doc)
+            if candidate_top_k > 0 and len(cleaned) >= candidate_top_k:
+                break
+        return cleaned

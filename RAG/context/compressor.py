@@ -53,13 +53,17 @@ class RelevanceFilterCompressor(BaseCompressor):
         query: str,
         token_budget: int,
     ) -> List[Document]:
-        total = sum(count_tokens(d.text) for d in documents)
+        filtered = self._filter_by_threshold(documents)
+        if not filtered:
+            filtered = documents[:1]
+
+        total = sum(count_tokens(d.text) for d in filtered)
         if total <= token_budget:
-            return documents
+            return filtered
 
         # Sort by effective score descending, drop from the tail
         scored = sorted(
-            documents,
+            filtered,
             key=lambda d: d.rerank_score if d.rerank_score is not None else d.score,
             reverse=True,
         )
@@ -70,7 +74,20 @@ class RelevanceFilterCompressor(BaseCompressor):
             if used + t <= token_budget:
                 kept.append(doc)
                 used += t
-        return kept
+        return kept or scored[:1]
+
+    def _filter_by_threshold(self, documents: List[Document]) -> List[Document]:
+        # RRF scores are tiny and not comparable to reranker logits, so only
+        # apply the absolute relevance threshold when rerank scores exist.
+        if not any(doc.rerank_score is not None for doc in documents):
+            return documents
+
+        kept = [
+            doc
+            for doc in documents
+            if (doc.rerank_score if doc.rerank_score is not None else doc.score) >= self._threshold
+        ]
+        return kept or documents[:1]
 
 
 class SummaryCompressor(BaseCompressor):

@@ -55,23 +55,38 @@ class ContextBuilder:
 
     def build(self, documents: Sequence[Document]) -> BuiltContext:
         selected: List[Document] = []
+        selected_effective: List[Document] = []
         citations: List[dict] = []
         seen_hashes: Set[str] = set()
+        seen_parent_ids: Set[str] = set()
         total_tokens = 0
         rendered_parts: List[str] = []
+        previous_rendered_text = ""
 
         for doc in documents:
             effective_score = doc.rerank_score if doc.rerank_score is not None else doc.score
             if effective_score < self.config.min_score:
                 continue
-            normalised = self._normalise_text(doc.text)
-            if normalised in seen_hashes:
-                continue
-            if self._is_semantic_duplicate(doc, selected):
+
+            parent_id = doc.metadata.get("parent_id")
+            if parent_id and parent_id in seen_parent_ids:
                 continue
 
             raw_text = self._resolve_parent(doc)
-            text = self._remove_overlap(raw_text, selected[-1].text if selected else "")
+            normalised = self._normalise_text(raw_text)
+            if normalised in seen_hashes:
+                continue
+
+            effective_doc = Document(
+                text=raw_text,
+                score=doc.score,
+                metadata=dict(doc.metadata),
+                rerank_score=doc.rerank_score,
+            )
+            if self._is_semantic_duplicate(effective_doc, selected_effective):
+                continue
+
+            text = self._remove_overlap(raw_text, previous_rendered_text)
             source = doc.metadata.get("source", "unknown")
             chunk_id = doc.metadata.get("chunk_id", "unknown")
             header = f"[source={source} chunk={chunk_id}]"
@@ -86,11 +101,16 @@ class ContextBuilder:
 
             rendered_parts.append(part)
             selected.append(doc)
+            selected_effective.append(effective_doc)
             seen_hashes.add(normalised)
+            if parent_id:
+                seen_parent_ids.add(parent_id)
+            previous_rendered_text = text
             total_tokens += part_tokens
             citations.append({
                 "source": source,
                 "chunk_id": chunk_id,
+                "parent_id": parent_id,
                 "section": doc.metadata.get("section"),
                 "page": doc.metadata.get("page"),
                 "score": doc.score,

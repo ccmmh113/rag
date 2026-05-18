@@ -24,7 +24,11 @@ run.py — TinyRAG 端到端交互入口
 
 from __future__ import annotations
 from dotenv import load_dotenv
+
+from RAG.context import ContextCompressor
+
 load_dotenv()
+import hashlib
 import json
 import numpy as np
 import os
@@ -55,6 +59,7 @@ INDEX_FILE = os.path.join(STORAGE_DIR, "index.pkl")
 VECTORS_FILE = os.path.join(STORAGE_DIR, "vectors.npy")
 TRACE_FILE = os.path.join(STORAGE_DIR, "traces.jsonl")
 LTM_DIR = os.path.join(STORAGE_DIR, "ltm")
+INDEX_SCHEMA_VERSION = 2
 
 
 def _index_dir(index_type: str) -> str:
@@ -87,24 +92,106 @@ def _parse_filter(args: str) -> dict:
     return result
 
 
-def _build_index(embedding_model, config: RAGConfig):
+def _normalise_path(path: str) -> str:
+    return os.path.normpath(path).replace("\\", "/")
+
+
+def _sha1_file(path: str) -> str:
+    digest = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha1_text(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _data_manifest(data_dir: str, config: RAGConfig) -> dict:
+    files = []
+    reader = ReadFiles(data_dir)
+    for path in sorted(reader.file_list):
+        stat = os.stat(path)
+        files.append({
+            "path": _normalise_path(os.path.abspath(path)),
+            "size": stat.st_size,
+            "sha1": _sha1_file(path),
+        })
     pc = config.parent_child
-    print(f"正在从 ./data/ 构建索引... (index_type={config.index.index_type})")
-    reader = ReadFiles("./data")
+    return {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "data_dir": _normalise_path(os.path.abspath(data_dir)),
+        "files": files,
+        "parent_child": {
+            "child_max_tokens": pc.child_max_tokens,
+            "child_overlap_tokens": pc.child_overlap_tokens,
+            "parent_max_tokens": pc.parent_max_tokens,
+        },
+    }
+
+
+def _load_saved_state() -> dict | None:
+    if not os.path.exists(INDEX_FILE):
+        return None
+    with open(INDEX_FILE, "rb") as f:
+        return pickle.load(f)
+
+
+def _vector_cache_from_state(saved: dict | None) -> dict[tuple[str, str], np.ndarray]:
+    if not saved or not os.path.exists(VECTORS_FILE):
+        return {}
+    try:
+        old_docs = saved.get("docs", [])
+        old_vectors = np.load(VECTORS_FILE)
+    except Exception:
+        return {}
+    cache: dict[tuple[str, str], np.ndarray] = {}
+    for doc, vector in zip(old_docs, old_vectors):
+        text_hash = doc.metadata.get("text_hash") or _sha1_text(doc.text)
+        cache[(doc.identity, text_hash)] = vector.astype(np.float32)
+    return cache
+
+
+def _stamp_chunk_hashes(docs):
+    for doc in docs:
+        doc.metadata["text_hash"] = _sha1_text(doc.text)
+
+
+def _build_index(embedding_model, config: RAGConfig, data_dir: str = "./data"):
+    pc = config.parent_child
+    print(f"正在从 {data_dir} 构建/更新索引... (index_type={config.index.index_type})")
+    manifest = _data_manifest(data_dir, config)
+    previous_state = _load_saved_state()
+    vector_cache = _vector_cache_from_state(previous_state)
+
+    reader = ReadFiles(data_dir)
     child_docs, parent_map = reader.get_parent_child_documents(
         child_max_tokens=pc.child_max_tokens,
         child_overlap_tokens=pc.child_overlap_tokens,
         parent_max_tokens=pc.parent_max_tokens,
     )
     if not child_docs:
-        raise RuntimeError("data/ 目录下没有找到文档，请先放入 .md/.txt/.pdf 文件。")
+        raise RuntimeError(f"{data_dir} 目录下没有找到文档，请先放入 .md/.txt/.pdf 文件。")
+    _stamp_chunk_hashes(child_docs)
     print(f"  子块数量: {len(child_docs)}, 父块数量: {len(parent_map)}")
 
     vectors = []
+    reused = 0
+    embedded = 0
     for i, doc in enumerate(child_docs, 1):
-        vectors.append(embedding_model.get_embedding(doc.text))
-        if i % 20 == 0:
-            print(f"嵌入进度 {i}/{len(child_docs)}")
+        cache_key = (doc.identity, doc.metadata["text_hash"])
+        cached = vector_cache.get(cache_key)
+        if cached is not None:
+            vectors.append(cached)
+            reused += 1
+        else:
+            vectors.append(embedding_model.get_embedding(doc.text))
+            embedded += 1
+        if embedded and embedded % 20 == 0:
+            print(f"新增嵌入进度 {embedded} 个 (扫描 {i}/{len(child_docs)})")
+
+    print(f"  向量复用: {reused}, 新增嵌入: {embedded}")
 
     vectors_arr = np.array(vectors, dtype=np.float32)
     dim = vectors_arr.shape[1]
@@ -112,7 +199,14 @@ def _build_index(embedding_model, config: RAGConfig):
     os.makedirs(STORAGE_DIR, exist_ok=True)
     np.save(VECTORS_FILE, vectors_arr)
     with open(INDEX_FILE, "wb") as f:
-        pickle.dump({"docs": child_docs, "dim": dim, "parent_map": parent_map}, f)
+        pickle.dump({
+            "docs": child_docs,
+            "dim": dim,
+            "parent_map": parent_map,
+            "manifest": manifest,
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "identity_version": 2,
+        }, f)
 
     index = FaissVectorIndex(dimension=dim, index_type=config.index.index_type)
     index.add(vectors_arr)
@@ -124,8 +218,9 @@ def _build_index(embedding_model, config: RAGConfig):
 def _load_index(config: RAGConfig):
     index_dir = _index_dir(config.index.index_type)
     print(f"从 {index_dir} 加载索引...")
-    with open(INDEX_FILE, "rb") as f:
-        saved = pickle.load(f)
+    saved = _load_saved_state()
+    if saved is None:
+        raise FileNotFoundError(INDEX_FILE)
     docs = saved["docs"]
     parent_map = saved.get("parent_map", {})
     index = FaissVectorIndex(dimension=saved["dim"], index_type=config.index.index_type)
@@ -134,16 +229,29 @@ def _load_index(config: RAGConfig):
     return docs, index, parent_map
 
 
-def load_or_build_index(embedding_model, config: RAGConfig):
+def load_or_build_index(embedding_model, config: RAGConfig, data_dir: str = "./data"):
     index_dir = _index_dir(config.index.index_type)
-    if os.path.exists(index_dir):
+    current_manifest = _data_manifest(data_dir, config)
+    saved = _load_saved_state()
+    if (
+        os.path.exists(index_dir)
+        and saved
+        and saved.get("schema_version") == INDEX_SCHEMA_VERSION
+        and saved.get("manifest") == current_manifest
+    ):
         return _load_index(config)
 
+    if saved and os.path.exists(index_dir):
+        print("检测到 data/ 文档或分块配置变化，开始增量更新索引...")
+
     # 该类型索引不存在，尝试从缓存向量重建（无需重新 embed）
-    if os.path.exists(VECTORS_FILE) and os.path.exists(INDEX_FILE):
+    if (
+        saved
+        and os.path.exists(VECTORS_FILE)
+        and saved.get("schema_version") == INDEX_SCHEMA_VERSION
+        and saved.get("manifest") == current_manifest
+    ):
         print(f"从缓存向量重建 {config.index.index_type} 索引 (无需重新嵌入)...")
-        with open(INDEX_FILE, "rb") as f:
-            saved = pickle.load(f)
         docs = saved["docs"]
         parent_map = saved.get("parent_map", {})
         vectors_arr = np.load(VECTORS_FILE)
@@ -153,7 +261,7 @@ def load_or_build_index(embedding_model, config: RAGConfig):
         print(f"  {config.index.index_type} 索引已保存到 {index_dir}\n")
         return docs, index, parent_map
 
-    return _build_index(embedding_model, config)
+    return _build_index(embedding_model, config, data_dir=data_dir)
 
 
 def _mask_env(name: str) -> str:
@@ -201,6 +309,7 @@ def build_runtime(docs, index, embedding_model, parent_map, config: RAGConfig, r
     chat_model = os.getenv("OPENAI_MODEL") or DEFAULT_CHAT_MODEL
     ret_cfg = config.retrieval
     ctx_cfg = config.context
+    compress_cfg=config.compression
     retriever = HybridRetriever(
         DenseRetriever(docs, index, embedding_model),
         BM25Retriever(docs),
@@ -223,18 +332,21 @@ def build_runtime(docs, index, embedding_model, parent_map, config: RAGConfig, r
             semantic_dedup_threshold=ctx_cfg.semantic_dedup_threshold,
             enable_semantic_dedup=ctx_cfg.enable_semantic_dedup,
         ),
+        embedding_model=embedding_model,
         parent_map=parent_map,
     )
     memory = MemoryManager(
         db_path=LTM_DIR,
         embedding_model=embedding_model,
     )
+    compress= ContextCompressor(compress_cfg,OpenAIChat(model=chat_model))
     return RAGRuntime(
         retriever=retriever,
         context_builder=context_builder,
         llm=OpenAIChat(model=chat_model),
         prompt_manager=PromptManager(),
         memory=memory,
+        compressor=compress,
         router=PolicyRouter.default(),
         reranker=reranker,
         trace_store=TraceStore(path=TRACE_FILE),
