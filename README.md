@@ -7,7 +7,7 @@
     ├─[1] Memory Context ── 拉取对话历史 + 用户偏好
     ├─[2] Query Routing ── 判断查询类型，决定 dense/sparse 权重
     ├─[3] Retrieval ────── 稠密检索 (FAISS) + 稀疏检索 (BM25) 并行，融合排序
-    ├─[4] Rerank ───────── 交叉编码器对 Top-50 精排，截断到 Top-8
+    ├─[4] Rerank ───────── 交叉编码器对 Top-20 精排，截断到 Top-8
     ├─[5] Compress ─────── 可选：相关性过滤 / LLM 摘要 / 混合
     ├─[6] Build Context ── 父块展开、去重、去重叠、token 预算截断
     ├─[7] Generate ─────── 拼装 Prompt → LLM 生成答案
@@ -84,7 +84,6 @@
   评分规则: 恒定 0.35
   权重 (dense/sparse): 0.5 / 0.5
 
-  选中的权重会实时写入 HybridRetriever.config.dense_weight / sparse_weight。
 
   阶段 3：Retrieval（检索召回）
 
@@ -240,9 +239,9 @@
     │
     │  query 进来
     ▼
-  Dense: FAISS search top-50   ╲
+  Dense: FAISS search top-20   ╲
                                  ╲  [RRF / Weighted Fusion]
-  Sparse: BM25 search top-50   ╱
+  Sparse: BM25 search top-20   ╱
                                  ╱
     ▼
   Top-50 fused documents
@@ -296,3 +295,5 @@
   环节: 追踪
   关键技术: JSONL 全链路指标
   亮点: 可分析延迟、cache 命中率、策略分布
+
+

@@ -43,9 +43,9 @@ class ParentChildConfig:
 
 @dataclass
 class RetrievalConfig:
-    dense_top_k: int = 50
-    sparse_top_k: int = 50
-    final_top_k: int = 50
+    dense_top_k: int = 20
+    sparse_top_k: int = 20
+    final_top_k: int = 20
     fusion: Literal["rrf", "weighted"] = "rrf"
     rrf_k: int = 60
     dense_weight: float = 0.9
@@ -89,6 +89,7 @@ class CompressionConfig:
     strategy: Literal["relevance_filter", "summary", "hybrid"] = "relevance_filter"
     relevance_threshold: float = 0.3   # min rerank_score to keep
     summary_max_tokens: int = 200      # per-chunk summary budget
+    prompt_max_tokens: Optional[int] = None  # full chat input budget; None disables prompt-level trimming
 
 
 # ── Memory ─────────────────────────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-ContextCompressor — reduces context size when it exceeds token budget.
+ContextCompressor — reduces parent-expanded context size when it exceeds token budget.
 
-Pipeline position:  retrieve → rerank → compress → build_context
+Pipeline position:  retrieve → rerank → parent_expand → compress → build_context
 
 Two strategies:
   relevance_filter  Fast, no LLM needed. Drops chunks below rerank_score threshold.

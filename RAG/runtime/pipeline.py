@@ -3,7 +3,7 @@
 """
 RAGRuntime — top-level orchestrator.
 
-Coordinates: Router → Retriever → Reranker → Compressor → ContextBuilder
+Coordinates: Router → Retriever → Reranker → ContextBuilder → Compressor
              → PromptManager → LLM → MemoryManager → TraceStore
 
 Single entry point: runtime.query(query) → RAGResponse
@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from RAG.context.builder import ContextBuilder
+from RAG.chunking import count_tokens
+from RAG.context.builder import BuiltContext, ContextBuilder
 from RAG.context.compressor import ContextCompressor
 from RAG.core.config import RAGConfig
 from RAG.memory.manager import MemoryContext
@@ -128,24 +129,39 @@ class RAGRuntime:
         trace.rerank_latency = round((time.perf_counter() - t0) * 1000, 1)
         trace.reranked_count = len(reranked)
 
-        # ── 6. Compress ────────────────────────────────────────────────
+        # ── 6. Parent expansion and compression ────────────────────────
+        context_docs = self._context_builder.prepare_documents(reranked)
         if self._compressor:
-            reranked = self._compressor.compress(
-                reranked, query, self._cfg.context.max_tokens
+            context_docs = self._compressor.compress(
+                context_docs, query, self._cfg.context.max_tokens
             )
 
         # ── 7. Build context ───────────────────────────────────────────
-        built = self._context_builder.build(reranked)
+        built = self._context_builder.build(context_docs, resolve_parents=False)
         trace.prompt_tokens = built.token_count
         trace.citations = built.citations
 
         # ── 8. Generate ────────────────────────────────────────────────
         session_ctx = self._memory.short_term.get_context_str() if self._memory else ""
+        history_messages = mem_ctx.history_messages
+        preferences = mem_ctx.preferences
+        prompt_budget = self._cfg.compression.prompt_max_tokens
+        if prompt_budget:
+            history_messages, preferences, session_ctx, context_docs, built = (
+                self._fit_prompt_budget(
+                    history_messages=history_messages,
+                    preferences=preferences,
+                    session_context=session_ctx,
+                    context_docs=context_docs,
+                    query=query,
+                    prompt_budget=prompt_budget,
+                )
+            )
         messages = self._prompt_manager.build_messages(
-            history=mem_ctx.history_messages,
+            history=history_messages,
             context=built.context,
             question=query,
-            preferences=mem_ctx.preferences,
+            preferences=preferences,
             session_context=session_ctx,
         )
         trace.prompt_tokens = built.token_count
@@ -188,6 +204,67 @@ class RAGRuntime:
             citations=built.citations,
             trace=trace,
         )
+
+    def _fit_prompt_budget(
+        self,
+        history_messages: List[Dict[str, str]],
+        preferences: List[str],
+        session_context: str,
+        context_docs: List["Document"],
+        query: str,
+        prompt_budget: int,
+    ) -> tuple[List[Dict[str, str]], List[str], str, List["Document"], BuiltContext]:
+        history = list(history_messages)
+        prefs = list(preferences)
+        sess_ctx = session_context
+        docs = list(context_docs)
+        built = self._context_builder.build(docs, resolve_parents=False)
+
+        def build_messages() -> List[Dict[str, str]]:
+            return self._prompt_manager.build_messages(
+                history=history,
+                context=built.context,
+                question=query,
+                preferences=prefs,
+                session_context=sess_ctx,
+            )
+
+        while history and self._messages_token_count(build_messages()) > prompt_budget:
+            drop_count = 2 if len(history) >= 2 else 1
+            history = history[drop_count:]
+
+        while prefs and self._messages_token_count(build_messages()) > prompt_budget:
+            prefs = prefs[:-1]
+
+        if sess_ctx and self._messages_token_count(build_messages()) > prompt_budget:
+            sess_ctx = ""
+
+        while len(docs) > 1 and self._messages_token_count(build_messages()) > prompt_budget:
+            docs = docs[:-1]
+            built = self._context_builder.build(docs, resolve_parents=False)
+
+        if docs and self._messages_token_count(build_messages()) > prompt_budget:
+            fixed_prompt_tokens = self._messages_token_count(
+                self._prompt_manager.build_messages(
+                    history=history,
+                    context="",
+                    question=query,
+                    preferences=prefs,
+                    session_context=sess_ctx,
+                )
+            )
+            remaining_context_tokens = max(1, prompt_budget - fixed_prompt_tokens)
+            built = self._context_builder.build(
+                docs,
+                resolve_parents=False,
+                max_tokens=remaining_context_tokens,
+            )
+
+        return history, prefs, sess_ctx, docs, built
+
+    def _messages_token_count(self, messages: List[Dict[str, str]]) -> int:
+        # Add a small per-message allowance for chat role/format tokens.
+        return sum(count_tokens(message.get("content", "")) + 4 for message in messages)
 
     def _apply_route(self, route_decision) -> None:
         """Apply route-selected weights to the hybrid retriever config."""

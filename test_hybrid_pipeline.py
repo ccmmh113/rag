@@ -53,6 +53,33 @@ class FakeLLM(BaseModel):
         return "这是一个测试回答。"
 
 
+class CapturingLLM(BaseModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[dict] = []
+
+    def chat(self, messages: list) -> str:
+        self.messages = messages
+        return "这是一个测试回答。"
+
+
+class StaticRetriever:
+    def __init__(self, documents):
+        self.documents = documents
+
+    def retrieve(self, query, top_k=None, metadata_filter=None):
+        return list(self.documents)
+
+
+class RecordingCompressor:
+    def __init__(self) -> None:
+        self.seen_documents = []
+
+    def compress(self, documents, query, token_budget):
+        self.seen_documents = list(documents)
+        return list(documents)
+
+
 # ── Shared fixture ─────────────────────────────────────────────────────────────
 
 DOCS = [
@@ -126,6 +153,29 @@ class TestRAGRuntimeBasic(unittest.TestCase):
 
 
 class TestContextOptimization(unittest.TestCase):
+    def test_prompt_keeps_stable_instructions_in_system_message(self):
+        manager = PromptManager()
+        messages = manager.build_messages(
+            history=[{"role": "user", "content": "上一轮问题"}],
+            context="[source=tiny.md chunk=0]\n证据",
+            question="当前问题",
+            preferences=["我是后端开发者"],
+            session_context="  - project: TinyRAG",
+        )
+
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("只回答上下文能支持的内容", messages[0]["content"])
+        self.assertIn("引用格式", messages[0]["content"])
+        self.assertNotIn("只回答上下文能支持的内容", messages[-1]["content"])
+        self.assertLess(
+            messages[-1]["content"].index("用户背景:"),
+            messages[-1]["content"].index("问题: 当前问题"),
+        )
+        self.assertLess(
+            messages[-1]["content"].index("问题: 当前问题"),
+            messages[-1]["content"].index("可参考的上下文:"),
+        )
+
     def test_parent_child_chunk_ids_are_unique(self):
         text = (
             "# 第一节\n"
@@ -193,6 +243,56 @@ class TestContextOptimization(unittest.TestCase):
         compressed = compressor.compress(docs, "TinyRAG", token_budget=1000)
 
         self.assertEqual([doc.text for doc in compressed], ["强相关内容"])
+
+    def test_runtime_compresses_after_parent_expansion(self):
+        child = Document(
+            "短子块",
+            score=0.9,
+            metadata={"source": "tiny.md", "chunk_id": 0, "parent_id": "p1"},
+        )
+        parent_text = "父块完整上下文 " * 80
+        compressor = RecordingCompressor()
+        runtime = RAGRuntime(
+            retriever=StaticRetriever([child]),
+            context_builder=ContextBuilder(
+                ContextBuilderConfig(max_tokens=1000),
+                parent_map={"p1": parent_text},
+            ),
+            llm=FakeLLM(),
+            prompt_manager=PromptManager(),
+            compressor=compressor,
+            config=RAGConfig(),
+        )
+
+        runtime.query("TinyRAG")
+
+        self.assertEqual(compressor.seen_documents[0].text, parent_text)
+
+    def test_prompt_budget_can_evict_short_term_history(self):
+        llm = CapturingLLM()
+        config = RAGConfig()
+        config.compression.prompt_max_tokens = 60
+        runtime = RAGRuntime(
+            retriever=StaticRetriever([
+                Document(
+                    "当前问题相关内容",
+                    score=0.9,
+                    metadata={"source": "tiny.md", "chunk_id": 0},
+                )
+            ]),
+            context_builder=ContextBuilder(ContextBuilderConfig(max_tokens=1000)),
+            llm=llm,
+            prompt_manager=PromptManager(),
+            memory=MemoryManager(db_path=None, embedding_model=FakeEmbedding()),
+            config=config,
+        )
+        runtime._memory.short_term.add("旧问题 " * 20, "旧回答 " * 20)
+
+        runtime.query("当前问题")
+
+        contents = [message["content"] for message in llm.messages]
+        self.assertFalse(any("旧问题" in content for content in contents))
+        self.assertTrue(any("当前问题" in content for content in contents))
 
 
 class TestIndexIncrementalBuild(unittest.TestCase):

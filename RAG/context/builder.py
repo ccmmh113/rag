@@ -53,15 +53,15 @@ class ContextBuilder:
         self.embedding_model = embedding_model
         self.parent_map: dict = parent_map or {}
 
-    def build(self, documents: Sequence[Document]) -> BuiltContext:
-        selected: List[Document] = []
+    def prepare_documents(
+        self,
+        documents: Sequence[Document],
+        resolve_parents: bool = True,
+    ) -> List[Document]:
+        prepared: List[Document] = []
         selected_effective: List[Document] = []
-        citations: List[dict] = []
         seen_hashes: Set[str] = set()
         seen_parent_ids: Set[str] = set()
-        total_tokens = 0
-        rendered_parts: List[str] = []
-        previous_rendered_text = ""
 
         for doc in documents:
             effective_score = doc.rerank_score if doc.rerank_score is not None else doc.score
@@ -72,7 +72,7 @@ class ContextBuilder:
             if parent_id and parent_id in seen_parent_ids:
                 continue
 
-            raw_text = self._resolve_parent(doc)
+            raw_text = self._resolve_parent(doc) if resolve_parents else doc.text
             normalised = self._normalise_text(raw_text)
             if normalised in seen_hashes:
                 continue
@@ -86,11 +86,35 @@ class ContextBuilder:
             if self._is_semantic_duplicate(effective_doc, selected_effective):
                 continue
 
+            prepared.append(effective_doc)
+            selected_effective.append(effective_doc)
+            seen_hashes.add(normalised)
+            if parent_id:
+                seen_parent_ids.add(parent_id)
+
+        return prepared
+
+    def build(
+        self,
+        documents: Sequence[Document],
+        resolve_parents: bool = True,
+        max_tokens: Optional[int] = None,
+    ) -> BuiltContext:
+        prepared = self.prepare_documents(documents, resolve_parents=resolve_parents)
+        selected: List[Document] = []
+        citations: List[dict] = []
+        total_tokens = 0
+        rendered_parts: List[str] = []
+        previous_rendered_text = ""
+        token_budget = max_tokens if max_tokens is not None else self.config.max_tokens
+
+        for doc in prepared:
+            raw_text = doc.text
             text = self._remove_overlap(raw_text, previous_rendered_text)
             source = doc.metadata.get("source", "unknown")
             chunk_id = doc.metadata.get("chunk_id", "unknown")
             header = f"[source={source} chunk={chunk_id}]"
-            available = self.config.max_tokens - total_tokens - count_tokens(header) - 2
+            available = token_budget - total_tokens - count_tokens(header) - 2
             if available <= 0:
                 break
             text = trim_to_tokens(text, available)
@@ -101,22 +125,18 @@ class ContextBuilder:
 
             rendered_parts.append(part)
             selected.append(doc)
-            selected_effective.append(effective_doc)
-            seen_hashes.add(normalised)
-            if parent_id:
-                seen_parent_ids.add(parent_id)
             previous_rendered_text = text
             total_tokens += part_tokens
             citations.append({
                 "source": source,
                 "chunk_id": chunk_id,
-                "parent_id": parent_id,
+                "parent_id": doc.metadata.get("parent_id"),
                 "section": doc.metadata.get("section"),
                 "page": doc.metadata.get("page"),
                 "score": doc.score,
                 "rerank_score": doc.rerank_score,
             })
-            if total_tokens >= self.config.max_tokens:
+            if total_tokens >= token_budget:
                 break
 
         return BuiltContext(

@@ -16,12 +16,22 @@ Message = dict[str, str]
 class PromptManager:
     """Build chat messages for RAG without mutating caller-owned history."""
 
+    DEFAULT_SYSTEM_PROMPT = (
+        "你是一个严谨的问答助手。请严格依据给定上下文回答用户的问题，总是使用中文回答。\n"
+        "不要使用上下文之外的知识补全事实；如果上下文没有足够证据，请直接说明“数据库中没有这个内容，不知道”。\n"
+        "如果可以回答，请在关键结论后标注引用，引用格式使用上下文头部中的 [source=... chunk=...]。\n"
+        "回答要求:\n"
+        "1. 只回答上下文能支持的内容。\n"
+        "2. 关键事实后尽量附上 [source=... chunk=...] 引用。\n"
+        "3. 上下文证据不足时，只回答“数据库中没有这个内容，不知道”。"
+    )
+
     def __init__(
         self,
-        system_prompt: str = "你是一个严谨的问答助手。请基于给定上下文回答问题。",
+        system_prompt: str | None = None,
         answer_language: str = "中文",
     ) -> None:
-        self.system_prompt = system_prompt
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         self.answer_language = answer_language
 
     def build_rag_prompt(
@@ -32,11 +42,6 @@ class PromptManager:
         session_context: str = "",
     ) -> str:
         parts: list[str] = []
-        parts.append(
-            f"请严格依据给定上下文回答用户的问题，总是使用{self.answer_language}回答。\n"
-            "不要使用上下文之外的知识补全事实；如果上下文没有足够证据，请直接说明“数据库中没有这个内容，不知道”。\n"
-            "如果可以回答，请在关键结论后标注引用，引用格式使用上下文头部中的 [source=... chunk=...]。\n\n"
-        )
 
         if preferences:
             parts.append("用户背景:\n")
@@ -51,10 +56,6 @@ class PromptManager:
         parts.append("可参考的上下文:\n```\n")
         parts.append(f"{context}\n")
         parts.append("```\n\n")
-        parts.append("回答要求:\n")
-        parts.append("1. 只回答上下文能支持的内容。\n")
-        parts.append("2. 关键事实后尽量附上 [source=... chunk=...] 引用。\n")
-        parts.append("3. 上下文证据不足时，只回答“数据库中没有这个内容，不知道”。\n")
         parts.append("回答:")
         return "".join(parts)
 
